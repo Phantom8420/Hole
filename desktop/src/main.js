@@ -7,6 +7,7 @@ const path = require('node:path');
 const { app, BrowserWindow, ipcMain, safeStorage } = require('electron');
 
 const { sleep } = require('./driver');
+const { loadEnvFile } = require('./envfile');
 const { dedupe, extract } = require('./extractors');
 const { sendItems, tokenStore } = require('./ingest');
 const { Limiter } = require('./limits');
@@ -15,6 +16,8 @@ const { Stage } = require('./stage');
 
 const SELF_TEST = process.argv.includes('--self-test');
 const DEFAULT_HOLE_URL = 'http://127.0.0.1:8765';
+
+if (!SELF_TEST) loadEnvFile(path.join(__dirname, '..', '.env.local'));
 
 // Keep rendering and input working when the window is covered or minimised --
 // a scan should not stall because something was dragged in front of it.
