@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from datetime import date
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -217,6 +218,8 @@ class App:
         try:
             if len(parts) == 3 and parts[0] == "jobs" and parts[1].isdigit() and parts[2] == "tailor":
                 return self._tailor(conn, int(parts[1]))
+            if len(parts) == 3 and parts[0] == "jobs" and parts[1].isdigit() and parts[2] == "applied":
+                return self._mark_applied(conn, int(parts[1]))
             if len(parts) == 3 and parts[0] == "applications" and parts[1].isdigit():
                 return self._decide(conn, int(parts[1]), parts[2])
             if len(parts) == 4 and parts[0] == "review" and parts[3] == "verify":
@@ -603,10 +606,59 @@ class App:
             db.update_application(conn, app_id, {"status": "approved", "approved_at": db.now()})
         elif action == "reject":
             db.update_application(conn, app_id, {"status": "rejected"})
+        elif action == "sent":
+            self._record_sent(conn, app_id, app)
         else:
             return _page("Unknown action", action, 404)
         conn.commit()
         return 303, f"/applications/{app_id}"
+
+    @staticmethod
+    def _record_sent(conn: sqlite3.Connection, app_id: int, app: dict[str, Any]) -> None:
+        """It went out: you applied on the employer's site, or some other way.
+        Recording that is what puts it in the dashboard's Applied list and lets
+        the duplicate and daily-cap checks see it. Pressing it twice keeps the
+        first date, and it never walks a response back to 'sent'."""
+        if app.get("status") in ("drafted", "approved"):
+            db.update_application(conn, app_id, {
+                "status": "sent",
+                "sent_date": date.today().isoformat(),
+                "channel": app.get("channel") or "manual",
+            })
+        if app.get("job_id"):
+            db.update_row(conn, "jobs", int(app["job_id"]), {"status": "applied"})
+
+    def _mark_applied(self, conn: sqlite3.Connection, job_id: int) -> tuple[int, str]:
+        """'I applied to this role', from the posting's own page. A draft for the
+        posting is the application, so it is the one marked sent; a new row is
+        only made when there is none, and not at all if one already went out."""
+        job = db.get_row(conn, "jobs", job_id)
+        if not job:
+            return _page("No such job", f"Job {job_id} is not in the database.", 404)
+        existing = db.rows_to_dicts(
+            conn.execute(
+                "SELECT * FROM applications WHERE job_id = ? ORDER BY id DESC", (job_id,)
+            ).fetchall()
+        )
+        draft = next((a for a in existing if a.get("status") in ("drafted", "approved")), None)
+        if draft:
+            self._record_sent(conn, int(draft["id"]), draft)
+        else:
+            if not any(a.get("status") in ("sent", "responded") for a in existing):
+                db.insert_application(conn, {
+                    "job_id": job_id,
+                    "company": job.get("company"),
+                    "role": job.get("title"),
+                    "source": job.get("source"),
+                    "job_url": job.get("apply_url") or job.get("url"),
+                    "status": "sent",
+                    "channel": "manual",
+                    "sent_date": date.today().isoformat(),
+                    "fit_score": job.get("fit_score"),
+                })
+            db.update_row(conn, "jobs", job_id, {"status": "applied"})
+        conn.commit()
+        return 303, f"/jobs/{job_id}"
 
     def _verify_row(self, conn: sqlite3.Connection, table: str, row_id: str) -> tuple[int, str]:
         if table not in pages.REVIEWABLE or not row_id.isdigit():

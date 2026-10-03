@@ -118,6 +118,18 @@ def _period_chip(value: Any) -> str:
     )
 
 
+def _competition_order(c: dict[str, Any]) -> tuple[int, int, str]:
+    """`deadline` is free text as often as a date, so SQL cannot order it
+    sensibly ("Apr" sorts before "Aug"). Sort here instead, and put the ones
+    you can still enter first -- a list led by closed competitions is useless."""
+    left = _days_until(c.get("deadline"))
+    if left is None:
+        return (1, 0, str(c.get("name") or ""))   # undated: after the open ones
+    if left < 0:
+        return (2, -left, str(c.get("name") or ""))  # closed: last, most recent first
+    return (0, left, str(c.get("name") or ""))       # open: soonest first
+
+
 # Ordered so a title matching more than one bucket lands in the more specific
 # one -- "Senior Backend Engineer, Data Platform" hits "data" before the
 # generic "swe" catch-all gets a chance. Checked against the lowercased title
@@ -182,6 +194,110 @@ def _job_rows(jobs: Sequence[dict[str, Any]]) -> str:
     return "".join(out)
 
 
+# The dashboard's three working lists. Applied means you said yes to it, whether
+# or not it has gone out yet: the same set policy.PolicyContext treats as "already
+# applied", so a posting never sits in To apply and Applied at once.
+APPLIED_STATUSES = ("approved", "sent", "responded")
+_APP_TONE = {"sent": "good", "approved": "good", "responded": "good", "rejected": "bad", "drafted": ""}
+_APPLIED_IN = "(" + ", ".join(f"'{s}'" for s in APPLIED_STATUSES) + ")"
+
+# Postings that got past the filters and that you have not applied to.
+_TO_APPLY = (
+    "status IN ('scored', 'tailored') AND fit_score IS NOT NULL AND id NOT IN ("
+    f"SELECT job_id FROM applications WHERE job_id IS NOT NULL AND status IN {_APPLIED_IN})"
+)
+
+
+def _to_apply(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
+    rows = db.rows_to_dicts(
+        conn.execute(
+            f"SELECT * FROM jobs WHERE {_TO_APPLY} "  # noqa: S608 -- constants only
+            "ORDER BY remote DESC, fit_score DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    )
+    total = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {_TO_APPLY}").fetchone()[0]  # noqa: S608
+    return rows, int(total)
+
+
+def _applied(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
+    rows = db.rows_to_dicts(
+        conn.execute(
+            f"SELECT * FROM applications WHERE status IN {_APPLIED_IN} "  # noqa: S608
+            "ORDER BY COALESCE(sent_date, approved_at, '') DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    )
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM applications WHERE status IN {_APPLIED_IN}"  # noqa: S608
+    ).fetchone()[0]
+    return rows, int(total)
+
+
+def _upcoming(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
+    """Competitions you can still enter, soonest deadline first, undated ones
+    after the dated ones. Dismissed and closed ones never show."""
+    rows = db.rows_to_dicts(
+        conn.execute(
+            "SELECT * FROM competitions WHERE status <> 'dismissed' ORDER BY id DESC LIMIT 400"
+        ).fetchall()
+    )
+    still_open = sorted(
+        (c for c in rows if _competition_order(c)[0] < 2), key=_competition_order
+    )
+    return still_open[:limit], len(still_open)
+
+
+def _stack_row(href: str, title: str, meta: str, *, tag: str = "", external: bool = False) -> str:
+    """A sidebar row: the title gets the width and `meta` (already escaped HTML)
+    sits under it, because the sidebar is too narrow for the table-style row the
+    Jobs page uses. An empty `href` makes it a plain, unlinked row."""
+    body = f'<span class="ti"><b>{esc(title)}</b><small>{meta}</small></span>{tag}'
+    if not href:
+        return f'<div class="trow two">{body}</div>'
+    icon = E.icon("external", 13, 2.2) if external else E.icon("arrow", 13, 2.5)
+    blank = ' target="_blank" rel="noopener noreferrer"' if external else ""
+    return f'<a class="trow two" href="{esc(href)}"{blank}>{body}<span class="go">{icon}</span></a>'
+
+
+def _to_apply_rows(jobs: Sequence[dict[str, Any]]) -> str:
+    out = []
+    for job in jobs:
+        pct, tone = _fit(job)
+        out.append(_stack_row(
+            f"/jobs/{int(job['id'])}",
+            (job.get("title") or "Untitled")[:70],
+            esc(f"{(job.get('company') or '—')[:24]} · {_where(job)}"),
+            tag=f'<span class="tag {tone}">{pct}</span>' if pct else "",
+        ))
+    return "".join(out)
+
+
+def _applied_rows(apps: Sequence[dict[str, Any]]) -> str:
+    return "".join(
+        _stack_row(
+            f"/applications/{int(a['id'])}",
+            (a.get("role") or "Untitled")[:70],
+            esc((a.get("company") or "—")[:30]),
+            tag=f'<span class="tag {_APP_TONE.get(str(a.get("status")), "mute")}">'
+                f'{esc(str(a.get("status") or ""))}</span>',
+        )
+        for a in apps
+    )
+
+
+def _upcoming_rows(competitions: Sequence[dict[str, Any]]) -> str:
+    return "".join(
+        _stack_row(
+            c.get("apply_url") or c.get("url") or "",
+            (c.get("name") or "Untitled")[:70],
+            f"{_deadline_chip(c.get('deadline'))}{esc((c.get('category') or '')[:20])}",
+            external=True,
+        )
+        for c in competitions
+    )
+
+
 def _arc_endpoints(country_rows: Sequence[tuple[str, float]]) -> tuple[tuple[float, float], tuple[float, float]]:
     """The two best-represented countries that have a centroid, so the arc on
     the globe connects places this data actually names."""
@@ -206,18 +322,11 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
     evidenced = len(db.skill_evidence_counts(conn))
     unevidenced = len(db.unevidenced_skills(conn))
 
-    # Remote is the target, so a remote posting outranks an on-site one at the
-    # same fit rather than being interleaved with it.
-    top_jobs = db.rows_to_dicts(
-        conn.execute(
-            "SELECT * FROM jobs WHERE fit_score IS NOT NULL "
-            "ORDER BY remote DESC, fit_score DESC, id DESC LIMIT 6"
-        ).fetchall()
-    )
-    if not top_jobs:  # nothing scored yet -- show the newest instead of an empty panel
-        top_jobs = db.rows_to_dicts(
-            conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 6").fetchall()
-        )
+    # Remote is the target, so in To apply a remote posting outranks an on-site
+    # one at any fit rather than being interleaved with it.
+    to_apply, to_apply_total = _to_apply(conn, 6)
+    applied, applied_total = _applied(conn, 5)
+    upcoming, upcoming_total = _upcoming(conn, 6)
 
     by_country = pages._postings_by_country(conn)
     series = pages._sent_vs_discovered(conn, days=14)
@@ -236,15 +345,38 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
     # this renders nothing and the dashboard is exactly the reference layout --
     # but a pipeline that cannot send, or one that sends unattended, says so
     # before anything else on the page.
-    sidebar = E.notices(pages._config_notices(config)) + E.search_card(action="/jobs") + E.list_panel(
-        title="Best matches",
-        sub=f"{counts['jobs']:,} postings sourced",
-        rows=_job_rows(top_jobs),
-        tools=f'<a class="sort-btn" href="/jobs" title="All jobs">{E.icon("arrow", 19)}</a>',
+    def more(href: str, title: str) -> str:
+        return f'<a class="sort-btn" href="{href}" title="{title}">{E.icon("arrow", 19)}</a>'
+
+    # The three lists are what the dashboard is for, so they come before the search box.
+    sidebar = (
+        E.notices(pages._config_notices(config))
+        + E.list_panel(
+            title="To apply",
+            sub=f"{to_apply_total:,} past your filters",
+            rows=_to_apply_rows(to_apply) or '<div class="empty">Nothing is past your filters yet.</div>',
+            tools=more("/jobs?status=scored&amp;scope=all", "Every posting past your filters"),
+            stacked=True,
+        )
+        + E.list_panel(
+            title="Applied",
+            sub=f"{applied_total:,} approved or sent",
+            rows=_applied_rows(applied) or '<div class="empty">Nothing applied to yet.</div>',
+            tools=more("/resume", "All applications"),
+            stacked=True,
+        )
+        + E.list_panel(
+            title="Upcoming competitions",
+            sub=f"{upcoming_total:,} still open",
+            rows=_upcoming_rows(upcoming) or '<div class="empty">No open competitions tracked.</div>',
+            tools=more("/competitions", "All competitions"),
+            stacked=True,
+        )
+        + E.search_card(action="/jobs")
     )
 
     # --- the callout the reference used for a fare, showing the strongest match
-    lead = top_jobs[0] if top_jobs else None
+    lead = to_apply[0] if to_apply else None
     if lead:
         pct, _tone = _fit(lead)
         fit_line = f"fit {pct}" if pct else "unscored"
@@ -433,18 +565,7 @@ def competitions(conn: sqlite3.Connection, *, q: str = "") -> str:
     sql += " ORDER BY id DESC LIMIT 400"
     rows = db.rows_to_dicts(conn.execute(sql, params).fetchall())
 
-    # `deadline` is free text as often as a date, so SQL cannot order it
-    # sensibly ("Apr" sorts before "Aug"). Sort here instead, and put the ones
-    # you can still enter first -- a list led by closed competitions is useless.
-    def order(c: dict[str, Any]) -> tuple[int, int, str]:
-        left = _days_until(c.get("deadline"))
-        if left is None:
-            return (1, 0, str(c.get("name") or ""))   # undated: after the open ones
-        if left < 0:
-            return (2, -left, str(c.get("name") or ""))  # closed: last, most recent first
-        return (0, left, str(c.get("name") or ""))       # open: soonest first
-
-    rows.sort(key=order)
+    rows.sort(key=_competition_order)
     rows = rows[:200]
 
     by_status = conn.execute(
@@ -713,7 +834,7 @@ def _app_row(a: dict[str, Any], *, href: str | None = None) -> str:
     if score not in (None, ""):
         f = float(score)
         pct = f"{int(round(f * 100))}" if f <= 1 else f"{int(round(f))}"
-    tone = {"sent": "good", "rejected": "bad", "drafted": ""}.get(str(a.get("status")), "mute")
+    tone = _APP_TONE.get(str(a.get("status")), "mute")
     link = href or f"/applications/{int(a['id'])}"
     return (
         f'<a class="trow" href="{esc(link)}">'
@@ -1283,6 +1404,11 @@ def job_detail(
     tailor = E.form(
         f"/jobs/{job_id}/tailor", token, "", "Tailor an application for this role"
     )
+    # Applying happens on the employer's site, so this is how it gets recorded.
+    if job.get("status") != "applied" and not any(
+        a.get("status") in APPLIED_STATUSES for a in existing
+    ):
+        tailor += E.form(f"/jobs/{job_id}/applied", token, "", "I applied to this role")
     apps_panel = E.panel(
         "Applications",
         "".join(_app_row(a) for a in existing)
@@ -1353,14 +1479,16 @@ def application_detail(
         ]
     )
 
-    decide = ""
+    buttons = []
     if status == "drafted":
-        decide = (
-            '<div class="frow" style="margin-top:12px">'
-            + E.form(f"/applications/{app_id}/approve", token, "", "Approve", cls="inline")
-            + E.form(f"/applications/{app_id}/reject", token, "", "Reject", cls="inline dan")
-            + "</div>"
-        )
+        buttons.append(E.form(f"/applications/{app_id}/approve", token, "", "Approve", cls="inline"))
+    if status in ("drafted", "approved"):
+        buttons.append(E.form(f"/applications/{app_id}/sent", token, "", "Mark as sent", cls="inline"))
+    if status == "drafted":
+        buttons.append(E.form(f"/applications/{app_id}/reject", token, "", "Reject", cls="inline dan"))
+    decide = (
+        '<div class="frow" style="margin-top:12px">' + "".join(buttons) + "</div>" if buttons else ""
+    )
 
     why = (
         E.notices([{ "tone": "warn", "text": "Why the policy engine decided this:", "items": reasons}])
