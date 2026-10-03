@@ -15,6 +15,9 @@ must equal `JOBSEARCH_API_TOKEN` on the server; it is kept in the OS keychain
 (`safeStorage`), or read from `HOLE_API_TOKEN` for development. `HOLE_URL` sets the
 default address, `HOLE_USER_DATA` points the app at a throwaway profile.
 
+For development, those three can live in `desktop/.env.local` (gitignored), one
+`NAME=value` per line; a variable already in the environment wins over the file.
+
 ## How it works
 
 - Each service gets a `WebContentsView` with its own persistent session
