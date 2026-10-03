@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -97,6 +98,23 @@ class CacheHeaderTests(ServerCase):
                 response, _ = self.request(method, path, body=body, headers=headers)
                 values = [v for k, v in response.getheaders() if k.lower() == "cache-control"]
                 self.assertEqual(values, ["no-store"])
+
+
+class DeployFilesAgreeTests(unittest.TestCase):
+    """The origin's name lives in three files and a mismatch only shows up in
+    production, so pin them to each other."""
+
+    DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
+
+    def test_vercel_proxies_every_path_including_the_root_to_the_origin(self) -> None:
+        origin = re.search(r"^(\S+) \{", (self.DEPLOY / "oracle" / "Caddyfile").read_text(), re.M).group(1)
+        unit = (self.DEPLOY / "oracle" / "jobsearch.service").read_text()
+        self.assertIn(f"JOBSEARCH_HOST={origin}", unit)
+
+        rewrites = json.loads((self.DEPLOY / "vercel" / "vercel.json").read_text())["rewrites"]
+        by_source = {r["source"]: r["destination"] for r in rewrites}
+        self.assertEqual(by_source["/"], f"https://{origin}/")
+        self.assertEqual(by_source["/:path*"], f"https://{origin}/:path*")
 
 
 class SessionCookieTests(ServerCase):

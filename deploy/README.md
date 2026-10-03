@@ -30,5 +30,14 @@ Update: `cd ~/Hole && git pull && sudo systemctl restart jobsearch`.
 
 A rewrite-only project: every request is proxied to the Oracle origin, so the public
 URL survives a change of VM. Import the repo in Vercel with **Root Directory** set to
-`deploy/vercel` and **Framework Preset** *Other*. Then add the Vercel hostname to
-`JOBSEARCH_HOST` on the VM (comma-separated) so the Host check lets it through.
+`deploy/vercel` and **Framework Preset** *Other*; it then redeploys on every push to
+`main`. If the VM's address changes, edit both destinations in `vercel.json` (along with
+the Caddyfile and `JOBSEARCH_HOST`; `tests/test_deploy.py` fails if they disagree).
+
+Production is `hole-roan.vercel.app` (plain `hole` was taken). What bit during setup:
+
+- **`/` needs its own rewrite.** `/:path*` does not match the bare root, so without it
+  the front page, and the redirect after login, is Vercel's 404.
+- **Vercel forwards the destination's `Host`,** not the visitor's, so the origin needs
+  nothing added for the Vercel hostname and `JOBSEARCH_HOST` stays the origin's own
+  name. The comma-separated list is for a proxy that does forward the original Host.
