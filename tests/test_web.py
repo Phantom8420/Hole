@@ -378,6 +378,30 @@ class DashboardListTests(WebTestCase):
         self.assertIn("2 past your filters", body)
         self.assertNotIn("Gone Intern", body)
 
+    def test_freelance_gigs_have_their_own_list_and_stay_out_of_to_apply(self) -> None:
+        soon = (date.today() + timedelta(days=3)).isoformat()
+        gone = (date.today() - timedelta(days=2)).isoformat()
+        self.add_job("Build a port scanner", employment_type="freelance", company="Acme DAO",
+                     compensation="USDC 500", deadline=soon, fit_score=20.0)
+        self.add_job("Old bounty", employment_type="freelance", deadline=gone)
+        self.add_job("Contract Python dev", employment_type="contract", fit_score=9.0)
+        body = self.dashboard()
+        self.assertIn("Freelance &amp; contract", body)
+        self.assertIn("2 open gigs", body)
+        self.assertIn("Build a port scanner", body)
+        self.assertIn("USDC 500", body)
+        self.assertIn("Contract Python dev", body)
+        self.assertNotIn("Old bounty", body)  # its deadline has passed
+        self.assertIn("1 past your filters", body)  # the fixture's posting only: gigs are not jobs to apply for
+
+    def test_a_gig_you_applied_to_leaves_the_freelance_list(self) -> None:
+        gig_id = self.add_job("Port scanner gig", employment_type="freelance", url="https://example.com/gig")
+        self.assertIn("Port scanner gig", self.dashboard())
+        self.app.post(f"/jobs/{gig_id}/applied", {"token": TOKEN})
+        body = self.dashboard()
+        self.assertIn("0 open gigs", body)
+        self.assertIn("1 approved or sent", body)  # it is under Applied now
+
     def test_applied_lists_what_you_said_yes_to_and_takes_it_off_to_apply(self) -> None:
         body = self.dashboard()
         self.assertIn("Nothing applied to yet", body)

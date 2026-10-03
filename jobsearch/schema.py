@@ -388,6 +388,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     compensation TEXT,
     posted_at TEXT,
     employment_type TEXT,                 -- internship / full_time / part_time / contract / freelance, where the source says
+    deadline TEXT,                        -- last day to apply or enter, for gigs that have one
     discovered_at TEXT NOT NULL,
     fingerprint TEXT NOT NULL UNIQUE,
     fit_score REAL,

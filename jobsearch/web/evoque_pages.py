@@ -21,7 +21,7 @@ from datetime import date, datetime
 from typing import Any, Sequence
 
 from .. import answers as answer_bank
-from .. import db
+from .. import db, policy
 from ..config import Config
 from . import evoque as E
 from . import geo, pages
@@ -201,10 +201,17 @@ APPLIED_STATUSES = ("approved", "sent", "responded")
 _APP_TONE = {"sent": "good", "approved": "good", "responded": "good", "rejected": "bad", "drafted": ""}
 _APPLIED_IN = "(" + ", ".join(f"'{s}'" for s in APPLIED_STATUSES) + ")"
 
-# Postings that got past the filters and that you have not applied to.
-_TO_APPLY = (
-    "status IN ('scored', 'tailored') AND id NOT IN ("
-    f"SELECT job_id FROM applications WHERE job_id IS NOT NULL AND status IN {_APPLIED_IN})"
+_FREELANCE_IN = "(" + ", ".join(f"'{t}'" for t in policy.FREELANCE_TYPES) + ")"
+_NOT_APPLIED = f"id NOT IN (SELECT job_id FROM applications WHERE job_id IS NOT NULL AND status IN {_APPLIED_IN})"
+
+# Postings that got past the filters and that you have not applied to. A freelance gig is
+# not a job to apply for, so it has its own list.
+_TO_APPLY = f"status IN ('scored', 'tailored') AND IFNULL(employment_type, '') NOT IN {_FREELANCE_IN} AND {_NOT_APPLIED}"
+
+# Gigs still open: a deadline that has passed takes one off.
+_FREELANCE = (
+    f"status IN ('scored', 'tailored') AND employment_type IN {_FREELANCE_IN} "
+    f"AND (deadline IS NULL OR deadline >= date('now')) AND {_NOT_APPLIED}"
 )
 
 
@@ -217,6 +224,20 @@ def _to_apply(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]
         ).fetchall()
     )
     total = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {_TO_APPLY}").fetchone()[0]  # noqa: S608
+    return rows, int(total)
+
+
+def _freelance(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
+    """Freelance and contract gigs that got past the filters: soonest deadline first,
+    then by fit."""
+    rows = db.rows_to_dicts(
+        conn.execute(
+            f"SELECT * FROM jobs WHERE {_FREELANCE} "  # noqa: S608 -- constants only
+            "ORDER BY deadline IS NULL, deadline, IFNULL(fit_score, -1) DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    )
+    total = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {_FREELANCE}").fetchone()[0]  # noqa: S608
     return rows, int(total)
 
 
@@ -269,6 +290,19 @@ def _to_apply_rows(jobs: Sequence[dict[str, Any]]) -> str:
             (job.get("title") or "Untitled")[:70],
             esc(f"{(job.get('company') or '—')[:24]} · {_where(job)}"),
             tag=f'<span class="tag {tone}">{pct}</span>' if pct else "",
+        ))
+    return "".join(out)
+
+
+def _freelance_rows(gigs: Sequence[dict[str, Any]]) -> str:
+    out = []
+    for gig in gigs:
+        pay = f" · {gig['compensation']}" if gig.get("compensation") else ""
+        due = _deadline_chip(gig["deadline"]) if gig.get("deadline") else ""
+        out.append(_stack_row(
+            f"/jobs/{int(gig['id'])}",
+            (gig.get("title") or "Untitled")[:70],
+            f"{esc((gig.get('company') or '—')[:22])}{esc(pay[:28])} {due}",
         ))
     return "".join(out)
 
@@ -326,6 +360,7 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
     # one at any fit rather than being interleaved with it.
     to_apply, to_apply_total = _to_apply(conn, 6)
     applied, applied_total = _applied(conn, 5)
+    freelance, freelance_total = _freelance(conn, 6)
     upcoming, upcoming_total = _upcoming(conn, 6)
 
     by_country = pages._postings_by_country(conn)
@@ -363,6 +398,13 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
             sub=f"{applied_total:,} approved or sent",
             rows=_applied_rows(applied) or '<div class="empty">Nothing applied to yet.</div>',
             tools=more("/resume", "All applications"),
+            stacked=True,
+        )
+        + E.list_panel(
+            title="Freelance & contract",
+            sub=f"{freelance_total:,} open gigs",
+            rows=_freelance_rows(freelance) or '<div class="empty">No open gigs yet.</div>',
+            tools=more("/jobs?status=scored&amp;scope=all", "Every posting past your filters"),
             stacked=True,
         )
         + E.list_panel(

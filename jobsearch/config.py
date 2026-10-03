@@ -69,6 +69,9 @@ class SearchConfig:
     require_title_keywords: list[str] = field(default_factory=list)
     # Most years of experience a posting may ask for; None means do not look.
     max_experience_years: int | None = None
+    # True: a freelance or contract posting skips the title and level rules above, which
+    # are written for jobs, and is judged on the rest. False: screened like any posting.
+    include_freelance: bool = False
     # Calibrated against real board data: across 544 live Stripe postings a
     # backend profile scored 0 on sales roles, ~7 median, and 35-43 on the
     # genuinely matching engineering roles. 30 sits just under that top band.
@@ -202,6 +205,7 @@ class Config:
                 if _get(raw, "search.max_experience_years") is None
                 else max(0, int(_get(raw, "search.max_experience_years")))
             ),
+            include_freelance=bool(_get(raw, "search.include_freelance", False)),
             min_fit=float(_get(raw, "search.min_fit", 45.0)),
             max_age_days=int(_get(raw, "search.max_age_days", 30)),
         )

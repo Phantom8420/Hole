@@ -526,6 +526,8 @@ def run(
             })
             report.screened_out += 1
             continue
+        if config.search.include_freelance and job.get("employment_type") in policy.FREELANCE_TYPES:
+            continue  # a gig is listed for you to look at, not tailored or applied to for you
         if context.tailored_this_run >= ceiling:
             continue
         process_job(conn, config, g, job, context, report, dry_run=dry_run)

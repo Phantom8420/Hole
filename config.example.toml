@@ -91,6 +91,12 @@ require_title_keywords = []
 # at all; leave it out and nothing is checked.
 # max_experience_years = 1
 
+# true: freelance and contract postings (the sources that say so: Remotive, Jobicy,
+# Himalayas, Lever, Ashby, Superteam Earn) skip the title and level rules above, which are
+# written for jobs, and are judged on the rest. They show on the dashboard as freelance and
+# are never tailored or applied to for you. false: screened like any posting.
+include_freelance = false
+
 # Fit score floor, 0-100. Measures how much of what a posting most insists on
 # your record actually covers.
 #

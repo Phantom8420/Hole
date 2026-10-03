@@ -29,6 +29,9 @@ SEND = "send"
 QUEUE = "queue"
 SKIP = "skip"
 
+# Postings that are a piece of work to take on, not a job to apply for.
+FREELANCE_TYPES = ("freelance", "contract")
+
 # Placeholders boards use when they have not filled the location in.
 UNKNOWN_LOCATIONS = {
     "n/a", "n a", "na", "none", "tbd", "tba", "unknown", "various",
@@ -348,14 +351,19 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     if word:
         return Decision(SKIP, [f"title has the excluded word '{word}'"])
 
+    # A gig is judged on what it asks and where, not on the level and role names meant
+    # for jobs: the posting for a Python script is not titled "Software Engineer Intern".
+    freelance = search.include_freelance and job.get("employment_type") in FREELANCE_TYPES
+
     if (
         search.require_title_keywords
+        and not freelance
         and job.get("employment_type") != "internship"  # a source that says so is as good as the title
         and not title_word(title, search.require_title_keywords)
     ):
         return Decision(SKIP, [f"title '{title}' names none of the levels you asked for"])
 
-    if not title_matches(title, search.titles):
+    if not freelance and not title_matches(title, search.titles):
         return Decision(SKIP, [f"title '{title}' does not match any configured title"])
 
     if search.max_experience_years is not None:
@@ -376,6 +384,9 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
 
     if _too_old(job.get("posted_at"), search.max_age_days):
         return Decision(SKIP, [f"posted {job.get('posted_at')}, older than {search.max_age_days} days"])
+
+    if job.get("deadline") and str(job["deadline"])[:10] < date.today().isoformat():
+        return Decision(SKIP, [f"the deadline, {str(job['deadline'])[:10]}, has passed"])
 
     if _pair(company, title) in context.applied_fingerprints:
         return Decision(SKIP, ["already applied to this role"])

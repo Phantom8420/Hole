@@ -116,6 +116,7 @@ ADDITIVE_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "jobs": [
         ("employment_type", "TEXT"),
+        ("deadline", "TEXT"),
     ],
     "applications": [
         ("job_id", "INTEGER"),
