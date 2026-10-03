@@ -180,6 +180,59 @@ def _title_word(title: str, words: Sequence[str]) -> str | None:
     return None
 
 
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_NUMBER = r"\d{1,2}|" + "|".join(_NUMBER_WORDS)
+_YEARS = re.compile(
+    rf"(?<![\w.$])({_NUMBER})(?:\s*\(\d{{1,2}}\))?"  # "five (5) years"
+    rf"(\s*\+|\s+plus|\s+or\s+more|\s*(?:-|–|—|to)\s*(?:{_NUMBER}))?"  # 3+, 3-5, 3 to 5
+    r"\s*(?:years?|yrs?)\b",
+    re.IGNORECASE,
+)
+# In front of the number these make it something other than a requirement.
+_NOT_A_REQUIREMENT = re.compile(
+    r"(less than|fewer than|up to|under|within|past|last|next|per|every|each|"
+    r"in the|for the|over the|after|before)\s*$",
+    re.IGNORECASE,
+)
+_AT_LEAST = re.compile(r"(at least|minimum( of)?|min\.?)\s*$", re.IGNORECASE)
+# "2 years of university" is schooling, which an intern is in the middle of.
+_SCHOOLING = re.compile(
+    r"\s*(of\s+)?(university|college|higher education|education|school|study|studies|"
+    r"schooling|coursework|undergraduate|postgraduate|degree|academic)",
+    re.IGNORECASE,
+)
+
+
+def years_of_experience(text: str) -> int | None:
+    """Fewest years of experience the posting asks for, or None if it names none.
+
+    The smallest figure, not the largest: a posting that asks for "3+ years" of one
+    thing and mentions "10 years" of the team's history is a 3-year posting, and a
+    stray big number should not sink it. A figure only counts when it reads as a
+    requirement -- "3+ years", "at least 3 years", or "experience" in the same
+    sentence -- so "founded 10 years ago" and "the last 5 years" are left alone.
+    """
+    found: list[int] = []
+    for match in _YEARS.finditer(text or ""):
+        before = text[max(0, match.start() - 24) : match.start()]
+        if _NOT_A_REQUIREMENT.search(before) or _SCHOOLING.match(text[match.end() : match.end() + 30]):
+            continue
+        after = re.split(r"[.\n]", text[match.end() : match.end() + 70])[0]
+        asked = (
+            match.group(2) is not None
+            or _AT_LEAST.search(before)
+            or re.search(r"\bexperience\b", after, re.IGNORECASE)
+            or re.search(r"\bexperience\b\W*$", before, re.IGNORECASE)
+        )
+        if asked:
+            low = match.group(1).lower()
+            found.append(_NUMBER_WORDS.get(low) or int(low))
+    return min(found) if found else None
+
+
 def _too_old(posted_at: str | None, max_age_days: int) -> bool:
     if not posted_at or max_age_days <= 0:
         return False
@@ -208,8 +261,20 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     if word:
         return Decision(SKIP, [f"title has the excluded word '{word}'"])
 
+    if search.require_title_keywords and not _title_word(title, search.require_title_keywords):
+        return Decision(SKIP, [f"title '{title}' names none of the levels you asked for"])
+
     if not title_matches(title, search.titles):
         return Decision(SKIP, [f"title '{title}' does not match any configured title"])
+
+    if search.max_experience_years is not None:
+        years = years_of_experience(job.get("description") or "")
+        if years is not None and years > search.max_experience_years:
+            return Decision(
+                SKIP,
+                [f"asks for {years}+ years of experience, over max_experience_years "
+                 f"({search.max_experience_years})"],
+            )
 
     if search.remote_only and not job.get("remote"):
         return Decision(SKIP, ["remote_only is set and this posting is not remote"])

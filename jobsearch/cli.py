@@ -1244,6 +1244,10 @@ def cmd_config(args: argparse.Namespace) -> int:
         _out(f"  exclude_keywords      {', '.join(config.search.exclude_keywords)}")
     if config.search.exclude_title_keywords:
         _out(f"  exclude in titles     {', '.join(config.search.exclude_title_keywords)}")
+    if config.search.require_title_keywords:
+        _out(f"  title must say        {', '.join(config.search.require_title_keywords)}")
+    if config.search.max_experience_years is not None:
+        _out(f"  max experience asked  {config.search.max_experience_years} years")
     _out("")
     _out("  sources")
     if not config.sources:

@@ -355,6 +355,45 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(config.search.exclude_title_keywords, ["senior", "vp"])
         self.assertEqual(Config.from_dict({}).search.exclude_title_keywords, [])
 
+    def test_title_must_name_a_level(self) -> None:
+        self.config.search.require_title_keywords = ["intern", "internship", "co-op"]
+        for title in ("Backend Engineer Intern", "Backend Engineering Internship (2027)", "Backend Engineer, Co-op"):
+            with self.subTest(title):
+                self.assertEqual(self.screen(title=title).action, policy.QUEUE)
+        # "intern" is a word here, not the start of "internal" or "international".
+        for title in ("Backend Engineer", "Backend Engineer, Internal Tools", "Backend Engineer, International"):
+            with self.subTest(title):
+                decision = self.screen(title=title)
+                self.assertEqual(decision.action, policy.SKIP)
+                self.assertIn("levels you asked for", decision.reasons[0])
+
+    def test_no_required_level_lets_every_level_through(self) -> None:
+        self.assertEqual(self.config.search.require_title_keywords, [])
+        self.assertEqual(self.screen(title="Backend Engineer III").action, policy.QUEUE)
+
+    def test_level_and_experience_settings_come_from_the_config(self) -> None:
+        search = Config.from_dict(
+            {"search": {"require_title_keywords": ["Intern", "Co-op"], "max_experience_years": 1}}
+        ).search
+        self.assertEqual(search.require_title_keywords, ["intern", "co-op"])
+        self.assertEqual(search.max_experience_years, 1)
+        unset = Config.from_dict({}).search
+        self.assertEqual(unset.require_title_keywords, [])
+        self.assertIsNone(unset.max_experience_years)
+        # zero is a real answer ("no experience at all"), not the same as unset
+        self.assertEqual(Config.from_dict({"search": {"max_experience_years": 0}}).search.max_experience_years, 0)
+
+    def test_experience_the_posting_asks_for(self) -> None:
+        self.config.search.max_experience_years = 1
+        decision = self.screen()  # JOB asks for 5+ years
+        self.assertEqual(decision.action, policy.SKIP)
+        self.assertIn("5+ years", decision.reasons[0])
+        for description in ("1-3 years of Python experience", "No experience needed.", "Founded 10 years ago."):
+            with self.subTest(description):
+                self.assertEqual(self.screen(description=description).action, policy.QUEUE)
+        self.config.search.max_experience_years = None
+        self.assertEqual(self.screen().action, policy.QUEUE)
+
     def test_title_must_match(self) -> None:
         decision = self.screen(title="Account Executive")
         self.assertEqual(decision.action, policy.SKIP)
@@ -399,6 +438,42 @@ class ScreenTests(unittest.TestCase):
         self.assertTrue(policy.title_matches("Senior Backend Engineer", ["Backend Engineer"]))
         self.assertTrue(policy.title_matches("Backend Engineer, Payments", ["Backend Engineer"]))
         self.assertFalse(policy.title_matches("Warehouse Associate", ["Backend Engineer"]))
+
+
+class YearsOfExperienceTests(unittest.TestCase):
+    def test_reads_what_a_posting_asks_for(self) -> None:
+        cases = {
+            "5+ years of experience in Python": 5,
+            "<li>3-5 years of relevant experience</li>": 3,
+            "at least 2 years building services": 2,
+            "Minimum of four years in security": 4,
+            "Experience: 3 years": 3,
+            "five (5) years' experience": 5,
+            "2 or more years with Go": 2,
+            "0-1 years of experience": 0,
+            "1 to 3 yrs experience": 1,
+        }
+        for text, years in cases.items():
+            with self.subTest(text):
+                self.assertEqual(policy.years_of_experience(text), years)
+
+    def test_leaves_alone_what_is_not_a_requirement(self) -> None:
+        for text in (
+            "Founded 10 years ago",
+            "We have grown over the last 5 years",
+            "Over the past 3 years we shipped a lot",
+            "In business for 10 years",
+            "At least 2 years of university education, or equivalent work",
+            "Two years of college",
+            "Planning for the next 3-5 years",
+            "",
+        ):
+            with self.subTest(text):
+                self.assertIsNone(policy.years_of_experience(text))
+
+    def test_the_smallest_figure_is_the_ask(self) -> None:
+        text = "3+ years of Python. You will join a team with 10 years of experience."
+        self.assertEqual(policy.years_of_experience(text), 3)
 
 
 class DispatchDecisionTests(unittest.TestCase):
