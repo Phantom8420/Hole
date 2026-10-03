@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('hole', {
   capture: () => ipcRenderer.invoke('capture:run'),
   scan: () => ipcRenderer.invoke('scan:run'),
   send: (items) => ipcRenderer.invoke('ingest:send', items),
+  runStart: () => ipcRenderer.invoke('pipeline:start'),
+  runStatus: () => ipcRenderer.invoke('pipeline:status'),
   saveSettings: (values) => ipcRenderer.invoke('settings:save', values),
   setServiceUrl: (id, url) => ipcRenderer.invoke('services:setUrl', id, url),
   onNav: (callback) => ipcRenderer.on('nav:event', (_event, info) => callback(info)),

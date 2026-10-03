@@ -1,0 +1,12 @@
+[Unit]
+Description=Job search pipeline run: fetch, filter, tailor, and apply if autonomous is on
+After=network-online.target
+[Service]
+Type=oneshot
+User=opc
+WorkingDirectory=/home/opc/Hole
+ExecStart=/home/opc/Hole/.venv/bin/python -m jobsearch run
+# Tailoring and applying to a few dozen postings can take an hour or two. A run that
+# overlaps another stops itself (see runner.py), so a slow one never doubles up.
+TimeoutStartSec=4h
+Nice=10
