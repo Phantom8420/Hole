@@ -1069,19 +1069,43 @@ def submit(
             if _screenshot(page, confirmation):
                 artifacts.append(str(confirmation))
 
+            url_after = page.url
             body = (page.content() or "").lower()
+            # "thank you" / "submitted" show up in nav, footers and privacy text
+            # on plenty of forms, so the marker alone is a weak signal. Require
+            # it *and* corroboration that the form is actually gone: the URL
+            # moved, or the required fields / submit button are no longer there.
+            still_on_form = detect_ats(url_after) == ats and bool(_blocking_fields(page))
+            try:
+                submit_gone = not any(
+                    page.locator(sel).count() and page.locator(sel).first.is_visible()
+                    for sel in _selectors(SUBMIT_SELECTORS, ats, GENERIC_SUBMIT)
+                )
+            except Exception:
+                submit_gone = False
             browser.close()
 
-            looks_confirmed = any(
+            has_marker = any(
                 marker in body
-                for marker in ("thank you", "application received", "we have received", "submitted")
+                for marker in ("thank you", "application received", "we have received",
+                               "application submitted", "successfully submitted")
+            )
+            has_error = any(
+                marker in body
+                for marker in ("please fill", "is required", "required field",
+                               "please correct", "there was a problem", "invalid")
+            )
+            looks_confirmed = (
+                has_marker and not has_error and (url_after != apply_url or submit_gone)
+                and not still_on_form
             )
             return DispatchResult(
                 looks_confirmed,
                 "ats_form",
                 "submitted and confirmation page matched"
                 if looks_confirmed
-                else "submitted, but no confirmation text found -- check the screenshot",
+                else "submitted, but the result could not be confirmed -- check the screenshot "
+                "before re-running so this is not applied twice",
                 artifacts=artifacts,
             )
     except Exception as exc:

@@ -51,13 +51,30 @@ def _line_context(text: str, index: int, width: int = 70) -> str:
     return line[:width] + ("..." if len(line) > width else "")
 
 
+def _number_tokens(text: str) -> set[str]:
+    """The set of distinct numbers that appear in `text`, each normalized the
+    same way a generated token is. Membership against this set is exact -- a
+    plain `"50" in facts_string` substring test matched '50' inside '1500', a
+    phone number, or an id, and let fabricated metrics through.
+    """
+    out: set[str] = set()
+    for match in NUMBER_RE.finditer(text):
+        norm = _normalize_number(match.group(1).strip())
+        if not norm:
+            continue
+        out.add(norm)
+        out.add(norm.rstrip("%").rstrip("kmb").replace("percent", ""))
+    out.discard("")
+    return out
+
+
 def check_numbers(
     generated: str,
     profile: dict[str, str],
     achievements: Sequence[dict[str, Any]],
 ) -> list[Finding]:
     """Every metric in the draft should appear somewhere in the source facts."""
-    facts = _normalize_number(_facts_text(profile, achievements))
+    fact_numbers = _number_tokens(_facts_text(profile, achievements))
     findings: list[Finding] = []
     seen: set[str] = set()
 
@@ -71,7 +88,7 @@ def check_numbers(
         if line.lstrip().startswith(("#", "-", "*")) and line.lstrip()[:4].strip(" -*#").startswith(token):
             continue  # list marker, not a claim
         seen.add(norm)
-        if bare in facts or norm in facts:
+        if norm in fact_numbers or bare in fact_numbers:
             continue
         findings.append(Finding("unsourced-number", token, line))
     return findings

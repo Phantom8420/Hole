@@ -161,6 +161,20 @@ def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
 
 # --------------------------------------------------------------------------- generic CRUD
 
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _ident(name: str) -> str:
+    """Guard a table/column name that gets interpolated into SQL text.
+
+    Values are always bound as parameters, but identifiers cannot be, so any
+    caller that derives a table or column name from ingested data (CSV headers,
+    aggregator JSON keys, model output) would otherwise be an injection vector.
+    """
+    if not _IDENT_RE.match(name or ""):
+        raise ValueError(f"unsafe SQL identifier: {name!r}")
+    return name
+
 
 def insert_row(
     conn: sqlite3.Connection, table: str, data: dict[str, Any], *, or_ignore: bool = False
@@ -169,7 +183,8 @@ def insert_row(
     payload = {k: v for k, v in data.items() if v is not None}
     if not payload:
         raise ValueError(f"Nothing to insert into {table}")
-    columns = ", ".join(payload)
+    _ident(table)
+    columns = ", ".join(_ident(k) for k in payload)
     placeholders = ", ".join(f":{k}" for k in payload)
     verb = "INSERT OR IGNORE" if or_ignore else "INSERT"
     cur = conn.execute(f"{verb} INTO {table} ({columns}) VALUES ({placeholders})", payload)
@@ -181,24 +196,25 @@ def insert_row(
 def update_row(conn: sqlite3.Connection, table: str, row_id: int, changes: dict[str, Any]) -> bool:
     if not changes:
         return False
+    _ident(table)
     payload = dict(changes)
-    assignments = ", ".join(f"{col} = :{col}" for col in payload)
+    assignments = ", ".join(f"{_ident(col)} = :{col}" for col in payload)
     payload["__id"] = row_id
     cur = conn.execute(f"UPDATE {table} SET {assignments} WHERE id = :__id", payload)
     return cur.rowcount > 0
 
 
 def get_row(conn: sqlite3.Connection, table: str, row_id: int) -> dict[str, Any] | None:
-    return row_to_dict(conn.execute(f"SELECT * FROM {table} WHERE id = ?", (row_id,)).fetchone())
+    return row_to_dict(conn.execute(f"SELECT * FROM {_ident(table)} WHERE id = ?", (row_id,)).fetchone())
 
 
 def delete_row(conn: sqlite3.Connection, table: str, row_id: int) -> bool:
-    cur = conn.execute(f"DELETE FROM {table} WHERE id = ?", (row_id,))
+    cur = conn.execute(f"DELETE FROM {_ident(table)} WHERE id = ?", (row_id,))
     return cur.rowcount > 0
 
 
 def count_rows(conn: sqlite3.Connection, table: str) -> int:
-    return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    return int(conn.execute(f"SELECT COUNT(*) FROM {_ident(table)}").fetchone()[0])
 
 
 # --------------------------------------------------------------------------- provenance

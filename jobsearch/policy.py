@@ -61,11 +61,29 @@ US_STATE_ABBR = {
 }
 
 
+# Countries whose name shares a token with a US state ("Georgia") or that are
+# otherwise mistaken for the US. Named outright, they win over a coincidental
+# state-name match -- "London, United Kingdom" must not read as US just because
+# a later clause finds a state word. ("georgia" is left out on purpose: vetoing
+# it would also drop Atlanta, GA, a far more common posting than Tbilisi.)
+_NON_US_COUNTRY_MARKERS = (
+    "united kingdom", "canada", "australia", "india", "germany", "france",
+    "ireland", "netherlands", "singapore", "new zealand", "mexico", "brazil",
+    "spain", "poland", "portugal",
+)
+_NON_US_COUNTRY_TOKENS = {"uk", "england", "scotland", "wales"}
+
+
 def _is_us_location(location_norm: str) -> bool:
     if "united states" in location_norm or "usa" in location_norm.split():
         return True
     tokens = re.split(r"[,\s/|-]+", location_norm)
     tokens = [t for t in tokens if t]
+    # A non-US country named outright wins over a coincidental state-name match.
+    if any(m in location_norm for m in _NON_US_COUNTRY_MARKERS) or (
+        set(tokens) & _NON_US_COUNTRY_TOKENS
+    ):
+        return False
     if any(t in US_STATE_NAMES for t in (" ".join(tokens[i : i + 2]) for i in range(len(tokens)))):
         return True
     # A 2-letter state code only counts next to a state-shaped rest of the
