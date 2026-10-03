@@ -1,0 +1,157 @@
+:root {
+  --bg: #14110f;
+  --panel: #1d1815;
+  --line: #322a25;
+  --text: #f2ebe4;
+  --muted: #8d8178;
+  --accent: #f26a2e;
+  --bad: #e5584b;
+  --good: #5fb37c;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
+button, input, select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: 0.4; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #1a0e07; font-weight: 600; }
+
+input, select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* service rail */
+#rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+#rail button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  font-weight: 600;
+  font-size: 12px;
+  position: relative;
+}
+#rail button.active { background: var(--accent); border-color: var(--accent); color: #1a0e07; }
+#rail .spacer { flex: 1; }
+#rail button[data-level]::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+#rail button[data-level="capture"]::after { background: var(--good); }
+#rail button[data-level="batch"]::after { background: var(--accent); }
+
+/* toolbar + stage */
+#main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; }
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+#address-form { flex: 1; display: flex; min-width: 0; }
+#address { flex: 1; }
+.badge {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+#stage { position: relative; min-height: 0; }
+#empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--muted);
+  padding: 24px;
+}
+#empty form { display: flex; gap: 8px; }
+#empty input { width: 320px; }
+
+/* inbox */
+#inbox {
+  width: 360px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+#inbox[hidden] { display: none; }
+#inbox header, #inbox footer { padding: 10px 12px; }
+#inbox header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }
+#inbox h2 { font-size: 14px; margin: 0; }
+#inbox footer { border-top: 1px solid var(--line); display: grid; gap: 8px; }
+#items { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+#items li { padding: 10px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+#items .row { display: flex; gap: 6px; align-items: center; }
+#items .row input[type="text"] { flex: 1; }
+#items .url { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#items .empty { color: var(--muted); padding: 16px 12px; }
+#status { color: var(--muted); min-height: 1.4em; }
+#status.error { color: var(--bad); }
+#status.ok { color: var(--good); }
+
+/* settings */
+dialog {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  width: 440px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+dialog h2 { margin: 0 0 12px; font-size: 16px; }
+dialog label { display: grid; gap: 4px; margin-bottom: 12px; color: var(--muted); }
+dialog input { color: var(--text); }
+dialog .hint { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+dialog .error { color: var(--bad); min-height: 1.4em; margin: 0; }
+dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+code { background: var(--bg); padding: 1px 4px; border-radius: 4px; }
