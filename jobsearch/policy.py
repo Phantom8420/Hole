@@ -170,6 +170,16 @@ def title_matches(title: str, wanted: Sequence[str]) -> bool:
     return False
 
 
+def _title_word(title: str, words: Sequence[str]) -> str | None:
+    """The first of `words` that is in the title as a whole word, so "lead" does
+    not hit "Leadership" nor "vp" "VPN"."""
+    lowered = title.lower()
+    for word in words:
+        if word and re.search(rf"(?<!\w){re.escape(word)}(?!\w)", lowered):
+            return word
+    return None
+
+
 def _too_old(posted_at: str | None, max_age_days: int) -> bool:
     if not posted_at or max_age_days <= 0:
         return False
@@ -193,6 +203,10 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     hit = next((k for k in search.exclude_keywords if k and k in text), None)
     if hit:
         return Decision(SKIP, [f"posting mentions excluded keyword '{hit}'"])
+
+    word = _title_word(title, search.exclude_title_keywords)
+    if word:
+        return Decision(SKIP, [f"title has the excluded word '{word}'"])
 
     if not title_matches(title, search.titles):
         return Decision(SKIP, [f"title '{title}' does not match any configured title"])

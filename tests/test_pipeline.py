@@ -334,6 +334,27 @@ class ScreenTests(unittest.TestCase):
         decision = self.screen(description="Requires security clearance.")
         self.assertEqual(decision.action, policy.SKIP)
 
+    def test_excluded_title_word(self) -> None:
+        self.config.search.exclude_title_keywords = ["senior", "lead"]
+        for title in ("Senior Backend Engineer", "SENIOR backend engineer", "Backend Engineer (Lead)"):
+            with self.subTest(title):
+                decision = self.screen(title=title)
+                self.assertEqual(decision.action, policy.SKIP)
+                self.assertIn("excluded word", decision.reasons[0])
+
+    def test_title_words_are_whole_words_and_only_read_in_the_title(self) -> None:
+        self.config.search.exclude_title_keywords = ["senior", "lead", "vp"]
+        for title in ("Backend Engineer, Leadership Programme", "VPN Backend Engineer"):
+            with self.subTest(title):
+                self.assertEqual(self.screen(title=title).action, policy.QUEUE)
+        description = "You will work with senior engineers and a lead."
+        self.assertEqual(self.screen(description=description).action, policy.QUEUE)
+
+    def test_title_words_come_from_the_config_in_lower_case(self) -> None:
+        config = Config.from_dict({"search": {"exclude_title_keywords": ["Senior", "VP"]}})
+        self.assertEqual(config.search.exclude_title_keywords, ["senior", "vp"])
+        self.assertEqual(Config.from_dict({}).search.exclude_title_keywords, [])
+
     def test_title_must_match(self) -> None:
         decision = self.screen(title="Account Executive")
         self.assertEqual(decision.action, policy.SKIP)

@@ -53,6 +53,9 @@ class SearchConfig:
     remote_only: bool = False
     exclude_companies: list[str] = field(default_factory=list)
     exclude_keywords: list[str] = field(default_factory=list)
+    # Whole words, checked against the title only. For seniority: "senior" in a
+    # description is usually "work with senior engineers", in a title it is the job.
+    exclude_title_keywords: list[str] = field(default_factory=list)
     # Calibrated against real board data: across 544 live Stripe postings a
     # backend profile scored 0 on sales roles, ~7 median, and 35-43 on the
     # genuinely matching engineering roles. 30 sits just under that top band.
@@ -173,6 +176,9 @@ class Config:
             remote_only=bool(_get(raw, "search.remote_only", False)),
             exclude_companies=[c.lower() for c in _str_list(_get(raw, "search.exclude_companies"))],
             exclude_keywords=[k.lower() for k in _str_list(_get(raw, "search.exclude_keywords"))],
+            exclude_title_keywords=[
+                k.lower() for k in _str_list(_get(raw, "search.exclude_title_keywords"))
+            ],
             min_fit=float(_get(raw, "search.min_fit", 45.0)),
             max_age_days=int(_get(raw, "search.max_age_days", 30)),
         )
