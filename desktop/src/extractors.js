@@ -1,0 +1,175 @@
+'use strict';
+
+// Turn the page in front of the app into opportunities Hole can store.
+//
+// Each extractor runs inside the page (Driver.evaluate serialises it), so it is
+// a plain function with no closures. It returns items shaped like
+//   { kind: 'job' | 'competition' | 'page', title, url, company?, location?,
+//     description?, deadline? }
+// and returns [] when it recognises nothing. Selectors on LinkedIn and Indeed
+// drift every few months; the fixtures in test/ pin the markup these were
+// written against, and a miss degrades to the `page` capture, never to a crash.
+
+// Structured data first: any site that publishes JobPosting or Event JSON-LD
+// is readable the same way, whatever its markup does.
+function jsonld() {
+  const out = [];
+  const plain = (html) => {
+    const box = document.createElement('div');
+    box.innerHTML = html || '';
+    return (box.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+  };
+  const walk = (node) => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!node || typeof node !== 'object') return;
+    if (node['@graph']) walk(node['@graph']);
+    const types = [].concat(node['@type'] || []);
+    if (types.includes('JobPosting')) {
+      const org = node.hiringOrganization || {};
+      const place = [].concat(node.jobLocation || [])[0] || {};
+      const addr = place.address || {};
+      const country = addr.addressCountry && (addr.addressCountry.name || addr.addressCountry);
+      out.push({
+        kind: 'job',
+        title: String(node.title || ''),
+        company: String(typeof org === 'string' ? org : org.name || ''),
+        location: node.jobLocationType === 'TELECOMMUTE'
+          ? 'Remote'
+          : [addr.addressLocality, addr.addressRegion, country].filter(Boolean).join(', '),
+        url: node.url || location.href,
+        description: plain(node.description),
+      });
+    } else if (types.some((t) => /Event|Hackathon/.test(t))) {
+      out.push({
+        kind: 'competition',
+        title: String(node.name || ''),
+        url: node.url || location.href,
+        description: plain(node.description),
+        deadline: String(node.endDate || node.startDate || ''),
+      });
+    }
+  };
+  document.querySelectorAll('script[type="application/ld+json"]').forEach((tag) => {
+    try {
+      walk(JSON.parse(tag.textContent));
+    } catch {
+      // a malformed block is the site's problem, not ours
+    }
+  });
+  return out.filter((item) => item.title);
+}
+
+// LinkedIn job lists (search results and collections). Anchors to /jobs/view/<id>
+// are the stable part; the card text is split into title / company / location.
+function linkedin() {
+  const seen = new Set();
+  const out = [];
+  document.querySelectorAll('a[href*="/jobs/view/"]').forEach((a) => {
+    const match = a.href.match(/\/jobs\/view\/(?:[^/?]*-)?(\d{6,})/);
+    if (!match || seen.has(match[1])) return;
+    seen.add(match[1]);
+    const card = a.closest('li, [data-job-id], [data-occludable-job-id], .base-card, .job-card-container') || a.parentElement;
+    // Text leaves rather than innerText lines: whether two pieces of text sit on
+    // one line or two is CSS, and CSS is what changes.
+    const lines = [...card.querySelectorAll('*')]
+      .filter((node) => !node.children.length && node.textContent.trim())
+      .map((node) => node.textContent.trim().replace(/\s+/g, ' '));
+    const title = ((a.getAttribute('aria-label') || a.textContent || lines[0] || '').split('\n')[0]).trim().replace(/\s+/g, ' ');
+    const rest = lines.filter((line, i) => line !== lines[i - 1] && !line.startsWith(title));
+    if (!title) return;
+    out.push({
+      kind: 'job',
+      title,
+      company: rest[0] || '',
+      location: rest[1] || '',
+      url: `https://www.linkedin.com/jobs/view/${match[1]}/`,
+    });
+  });
+  return out;
+}
+
+// Indeed result cards: each title link carries the posting id in data-jk.
+function indeed() {
+  const seen = new Set();
+  const out = [];
+  document.querySelectorAll('a[data-jk]').forEach((a) => {
+    const id = a.getAttribute('data-jk');
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const card = a.closest('.job_seen_beacon, td.resultContent, li, div.cardOutline') || a.parentElement;
+    const text = (sel) => {
+      const el = card.querySelector(sel);
+      return el ? el.innerText.trim() : '';
+    };
+    const titled = a.querySelector('span[title]');
+    const title = (titled ? titled.getAttribute('title') : a.innerText || '').trim();
+    if (!title) return;
+    out.push({
+      kind: 'job',
+      title,
+      company: text('[data-testid="company-name"], .companyName'),
+      location: text('[data-testid="text-location"], .companyLocation'),
+      url: `${location.origin}/viewjob?jk=${id}`,
+    });
+  });
+  return out;
+}
+
+// Anything that looks like a competition among the links on the page: what
+// Discord channels, newsletters and listing pages without structured data have
+// in common. Deliberately loose; you review the result before it is sent.
+function links() {
+  const wanted = /hackathon|datathon|ideathon|competition|contest|challenge|bounty|fellowship|grant|case[- ]?(study|comp)/i;
+  const seen = new Set();
+  const out = [];
+  document.querySelectorAll('a[href^="http"]').forEach((a) => {
+    const label = (a.innerText || a.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
+    if (label.length < 6 || label.length > 200) return;
+    if (!wanted.test(label) && !wanted.test(a.href)) return;
+    if (seen.has(a.href)) return;
+    seen.add(a.href);
+    out.push({ kind: 'competition', title: label, url: a.href });
+  });
+  return out.slice(0, 100);
+}
+
+// Fallback and the universal path: the page itself, for you to classify.
+function page() {
+  const meta = (name) => {
+    const el = document.querySelector(`meta[property="${name}"], meta[name="${name}"]`);
+    return el ? el.content : '';
+  };
+  const selected = String(getSelection()).trim();
+  const body = selected || (document.querySelector('main, article') || document.body).innerText || '';
+  return [{
+    kind: 'page',
+    title: (meta('og:title') || document.title || '').trim(),
+    company: meta('og:site_name'),
+    url: location.href,
+    description: body.trim().slice(0, 15000),
+  }];
+}
+
+const EXTRACTORS = { jsonld, linkedin, indeed, links, page };
+
+function dedupe(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = (item.url || item.title).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Run a service's extractors in order, merge, and fall back to the page capture.
+async function extract(driver, names) {
+  const found = [];
+  for (const name of names) {
+    if (EXTRACTORS[name]) found.push(...(await driver.evaluate(EXTRACTORS[name])));
+  }
+  const items = dedupe(found);
+  return items.length ? items : driver.evaluate(EXTRACTORS.page);
+}
+
+module.exports = { EXTRACTORS, extract, dedupe };

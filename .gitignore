@@ -48,3 +48,8 @@ frontend/dist/
 
 # Local dev server log
 server.log
+
+# Desktop shell (npm install in desktop/); .env.local is its dev-only settings file
+desktop/node_modules/
+desktop/dist/
+desktop/.env.local

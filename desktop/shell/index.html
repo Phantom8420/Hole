@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hole</title>
+  <link rel="stylesheet" href="shell.css">
+</head>
+<body>
+  <nav id="rail" aria-label="Services"></nav>
+
+  <main id="main">
+    <header id="toolbar">
+      <button id="back" title="Back" aria-label="Back">&larr;</button>
+      <button id="forward" title="Forward" aria-label="Forward">&rarr;</button>
+      <button id="reload" title="Reload" aria-label="Reload">&#8635;</button>
+      <form id="address-form"><input id="address" spellcheck="false" autocomplete="off" aria-label="Address"></form>
+      <span id="level" class="badge"></span>
+      <button id="capture" class="primary">Capture page</button>
+      <button id="scan">Scan searches</button>
+      <button id="toggle-inbox">Inbox <span id="inbox-count">0</span></button>
+    </header>
+    <section id="stage">
+      <div id="empty"></div>
+    </section>
+  </main>
+
+  <aside id="inbox" hidden>
+    <header>
+      <h2>Captured</h2>
+      <button id="clear">Clear</button>
+    </header>
+    <ul id="items"></ul>
+    <footer>
+      <div id="status" role="status"></div>
+      <button id="send" class="primary">Send selected to Hole</button>
+    </footer>
+  </aside>
+
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Settings</h2>
+      <label>Hole address
+        <input id="hole-url" spellcheck="false" autocomplete="off" placeholder="https://...">
+      </label>
+      <label>Ingest token
+        <input id="token" type="password" autocomplete="off" placeholder="">
+      </label>
+      <p class="hint">Must match <code>JOBSEARCH_API_TOKEN</code> on the server. Stored in your OS keychain, not in a file.</p>
+      <p id="settings-error" class="error"></p>
+      <div class="actions">
+        <button type="button" id="settings-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="shell.js"></script>
+</body>
+</html>

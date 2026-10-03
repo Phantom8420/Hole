@@ -1,0 +1,26 @@
+<!doctype html>
+<html><body>
+<!-- Shape of a LinkedIn jobs results list: an <li> per card, the title link repeated
+     for screen readers, then company and location lines. Hand-written to match the
+     structure the extractor relies on (the /jobs/view/<id> anchor), not scraped. -->
+<ul>
+  <li data-occludable-job-id="4012345678">
+    <a href="https://www.linkedin.com/jobs/view/data-intern-at-acme-4012345678?refId=abc" aria-label="Data Intern">
+      <strong>Data Intern</strong>
+    </a>
+    <span>Data Intern</span>
+    <span>Acme Analytics</span>
+    <span>Bengaluru, Karnataka, India (Hybrid)</span>
+    <span>2 days ago</span>
+  </li>
+  <li data-occludable-job-id="4098765432">
+    <a href="https://www.linkedin.com/jobs/view/4098765432/" aria-label="Software Engineering Intern">Software Engineering Intern</a>
+    <span>Beta Labs</span>
+    <span>Remote</span>
+  </li>
+  <li>
+    <a href="https://www.linkedin.com/jobs/view/4012345678/?trk=dup">Data Intern</a>
+  </li>
+  <li><a href="https://www.linkedin.com/company/acme/">Acme</a></li>
+</ul>
+</body></html>
