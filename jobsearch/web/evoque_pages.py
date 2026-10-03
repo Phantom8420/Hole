@@ -345,7 +345,10 @@ def _to_apply_rows(jobs: Sequence[dict[str, Any]]) -> str:
         out.append(_stack_row(
             f"/jobs/{int(job['id'])}",
             (job.get("title") or "Untitled")[:70],
-            esc(f"{(job.get('company') or '—')[:24]} · {_where(job)}"),
+            esc(
+                f"{(job.get('company') or '—')[:24]} · {_where(job)}"
+                + (f" · {str(job['compensation'])[:26]}" if job.get("compensation") else "")
+            ),
             tag=f'<span class="tag {tone}">{pct}</span>' if pct else "",
         ))
     return "".join(out)

@@ -369,6 +369,10 @@ class DashboardListTests(WebTestCase):
         self.assertNotIn("Skipped Wizard", body)
         self.assertNotIn("Unscored Wizard", body)
 
+    def test_to_apply_shows_the_pay_when_the_posting_states_it(self) -> None:
+        self.add_job("Paid Intern", compensation="USD 45-60 / hour", fit_score=44.0)
+        self.assertIn("USD 45-60 / hour", self.dashboard())
+
     def test_a_lead_with_no_fit_still_counts_and_a_closed_posting_does_not(self) -> None:
         # a lead whose text was out of reach is unscored, not a poor fit
         self.add_job("Workday Lead Intern", fit_score=None)
