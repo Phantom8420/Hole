@@ -78,6 +78,33 @@ def html_to_text(raw: str | None) -> str:
     return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
 
+# What a source's own word for a posting's kind maps to. Checked in this order, so
+# "Intern, part time" is an internship.
+_EMPLOYMENT_TYPES = (
+    ("internship", ("intern", "student", "trainee", "apprentice")),
+    ("freelance", ("freelance",)),
+    ("contract", ("contract", "temporary")),
+    ("part_time", ("part time", "part-time", "parttime")),
+    ("full_time", ("full time", "full-time", "fulltime", "permanent")),
+)
+
+
+def employment_type(*raw: Any) -> str | None:
+    """internship / freelance / contract / part_time / full_time, from whatever a source
+    calls it ("Contractor", "full_time", ["Student", "Intern"]), or None."""
+    words: list[str] = []
+    for value in raw:
+        if isinstance(value, (list, tuple, set)):
+            words.extend(str(v) for v in value)
+        elif value:
+            words.append(str(value))
+    text = " ".join(words).lower().replace("_", " ")
+    for kind, needles in _EMPLOYMENT_TYPES:
+        if any(needle in text for needle in needles):
+            return kind
+    return None
+
+
 def _normalize(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
@@ -97,6 +124,8 @@ class Posting:
     posted_at: str | None = None
     # internship / full_time / part_time / contract / freelance, when the source says.
     employment_type: str | None = None
+    # Last day to apply or enter (YYYY-MM-DD), for the gigs that have one.
+    deadline: str | None = None
 
     def __post_init__(self) -> None:
         if not self.apply_url:
@@ -125,6 +154,7 @@ class Posting:
             "compensation": self.compensation,
             "posted_at": self.posted_at,
             "employment_type": self.employment_type,
+            "deadline": self.deadline,
             "discovered_at": discovered_at,
             "fingerprint": self.fingerprint(),
             "status": "new",

@@ -388,6 +388,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     compensation TEXT,
     posted_at TEXT,
     employment_type TEXT,                 -- internship / full_time / part_time / contract / freelance, where the source says
+    deadline TEXT,                        -- last day to apply or enter, for gigs that have one
     discovered_at TEXT NOT NULL,
     fingerprint TEXT NOT NULL UNIQUE,
     fit_score REAL,
@@ -399,6 +400,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY,
     started_at TEXT NOT NULL,
+    heartbeat_at TEXT,                -- last sign of life; a run silent for an hour is taken to have died
     finished_at TEXT,
     mode TEXT,                        -- autonomous / review-only / dry-run
     sourced INTEGER NOT NULL DEFAULT 0,

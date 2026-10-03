@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jobsearch.policy import available_channel  # noqa: E402
 from jobsearch.sourcing import remote_boards as rb  # noqa: E402
+from jobsearch.sourcing.base import employment_type  # noqa: E402
 
 REMOTIVE = {
     "jobs": [
@@ -145,9 +146,9 @@ class ArbeitnowTests(unittest.TestCase):
         self.assertEqual(types["student1"], "internship")
         self.assertIsNone(types["local0"])
         self.assertIsNone(types["remote1"])
-        self.assertEqual(rb._arbeitnow_type(["Entry", "Working student", "Part time"]), "internship")
-        self.assertIsNone(rb._arbeitnow_type(["Experienced", "Permanent", "Full time"]))
-        self.assertIsNone(rb._arbeitnow_type(None))
+        self.assertEqual(employment_type(["Entry", "Working student", "Part time"]), "internship")
+        self.assertEqual(employment_type(["Experienced", "Permanent", "Full time"]), "full_time")
+        self.assertIsNone(employment_type(None))
 
 
 class FailureTests(unittest.TestCase):

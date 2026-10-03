@@ -101,6 +101,16 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
   color: var(--muted);
   white-space: nowrap;
 }
+.pipeline {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline.running { color: var(--accent); }
+.pipeline.error { color: var(--bad); }
 #stage { position: relative; min-height: 0; }
 #empty {
   position: absolute;

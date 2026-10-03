@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -492,11 +493,28 @@ class ScreenTests(unittest.TestCase):
         self.context.applied_fingerprints.add("acme|backend engineer")
         decision = self.screen()
         self.assertEqual(decision.action, policy.SKIP)
-        self.assertIn("already applied", decision.reasons[0])
+        self.assertIn("application for this role", decision.reasons[0])
 
-    def test_tailor_cap(self) -> None:
+    def test_a_full_run_does_not_turn_a_passing_posting_into_a_skip(self) -> None:
+        # run() leaves it scored for the next run; skipping it here took it off the list for good
         self.context.tailored_this_run = 99
-        self.assertEqual(self.screen().action, policy.SKIP)
+        self.assertEqual(self.screen().action, policy.QUEUE)
+
+    def test_a_draft_counts_as_an_application_for_the_role(self) -> None:
+        conn_path = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(conn_path.cleanup)
+        conn = db.connect(Path(conn_path.name) / "t.db")
+        self.addCleanup(conn.close)
+        db.insert_application(conn, {"company": "Acme", "role": "Backend Engineer", "status": "drafted"})
+        db.insert_application(conn, {"company": "Beta", "role": "Backend Engineer", "status": "rejected"})
+        context = policy.PolicyContext.load(conn)
+        self.assertEqual(self.screen_with(context).action, policy.SKIP)  # Acme: a draft exists
+        self.assertEqual(self.screen_with(context, company="Beta").action, policy.QUEUE)  # a rejected one does not
+        context.record_application("Gamma", "Backend Engineer")
+        self.assertEqual(self.screen_with(context, company="Gamma").action, policy.SKIP)
+
+    def screen_with(self, context: policy.PolicyContext, **overrides: object) -> policy.Decision:
+        return policy.screen({**JOB, **overrides}, self.config, context)
 
     def test_title_matching_is_loose_but_not_reckless(self) -> None:
         self.assertTrue(policy.title_matches("Senior Backend Engineer", ["Backend Engineer"]))
@@ -814,6 +832,101 @@ class PipelineTests(TempDbCase):
             job = db.get_row(conn, "jobs", 1)
         self.assertEqual(job["status"], "skipped")
         self.assertIn("does not match", job["skip_reason"])
+
+    def other_posting(self, **changes: object) -> base.Posting:
+        fields = dict(source="greenhouse", external_id="10", company="Beta", title="Backend Engineer II",
+                      location="Remote", apply_url="https://boards.greenhouse.io/beta/jobs/10",
+                      url="https://beta.example/careers", description=BACKEND_POSTING)
+        fields.update(changes)
+        return base.Posting(**fields)
+
+    def statuses(self) -> list[str]:
+        with db.session(self.db_path) as conn:
+            return sorted(r["status"] for r in conn.execute("SELECT status FROM jobs"))
+
+    def test_postings_past_the_cap_wait_for_the_next_run(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting()])
+        config = make_config(limits={"max_tailor_per_run": 1})
+        self.assertEqual(self.run_pipeline(config).tailored, 1)
+        self.assertEqual(self.statuses(), ["scored", "tailored"])  # not skipped
+        self.assertEqual(self.run_pipeline(config).tailored, 1)
+        self.assertEqual(self.statuses(), ["tailored", "tailored"])
+
+    def test_the_same_role_listed_twice_is_tailored_once(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting(company="Acme", title="Backend Engineer", location="Berlin",
+                                            external_id="11")])
+        report = self.run_pipeline(make_config())
+        self.assertEqual(report.tailored, 1)
+        with db.session(self.db_path) as conn:
+            skipped = conn.execute("SELECT skip_reason FROM jobs WHERE status = 'skipped'").fetchall()
+        self.assertEqual(len(skipped), 1)
+        self.assertIn("application for this role", skipped[0]["skip_reason"])
+
+    def test_a_model_out_of_quota_stops_the_asking_and_loses_nothing(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting()])
+        calls = []
+
+        def out_of_quota(*args: object, **kwargs: object):
+            calls.append(1)
+            raise generate.GenerationError("Gemini call failed: 429 RESOURCE_EXHAUSTED", transient=True)
+
+        with mock.patch.object(pipeline.generate, "generate", out_of_quota):
+            with db.session(self.db_path) as conn:
+                report = pipeline.run(conn, make_config(), skip_sourcing=True)
+        self.assertEqual(len(calls), 1)  # it did not ask for the second posting after the first
+        self.assertEqual(self.statuses(), ["scored", "scored"])  # nothing marked failed
+        self.assertEqual(len(report.errors), 1)
+        self.assertTrue(any("next run" in line for line in report.log))
+
+    def test_any_other_model_failure_still_fails_that_posting_only(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting()])
+        outcomes = iter([generate.GenerationError("Gemini refused the prompt"), None])
+
+        def sometimes(description: str, plan: object, **kwargs: object):
+            outcome = next(outcomes)
+            if outcome:
+                raise outcome
+            return stub_generate(CANNED)(description, plan, **kwargs)
+
+        with mock.patch.object(pipeline.generate, "generate", sometimes):
+            with db.session(self.db_path) as conn:
+                report = pipeline.run(conn, make_config(), skip_sourcing=True)
+        self.assertEqual(self.statuses(), ["failed", "tailored"])
+        self.assertEqual(report.tailored, 1)
+
+    def test_a_run_that_raises_still_finishes_its_row_and_says_why(self) -> None:
+        with mock.patch.object(pipeline, "score_jobs", side_effect=RuntimeError("the database went away")):
+            with db.session(self.db_path) as conn:
+                with self.assertRaises(RuntimeError):
+                    pipeline.run(conn, make_config(), skip_sourcing=True)
+        with db.session(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertIsNotNone(row["finished_at"])  # so it does not read as a run still going
+        self.assertIn("the database went away", row["notes"])
+        self.assertEqual(row["errors"], 1)
+
+    def test_a_run_beats_while_it_works(self) -> None:
+        report = self.run_pipeline(make_config())
+        with db.session(self.db_path) as conn:
+            row = db.get_row(conn, "pipeline_runs", report.run_id)
+        self.assertIsNotNone(row["heartbeat_at"])
+        self.assertGreaterEqual(row["heartbeat_at"], row["started_at"])
+
+    def test_a_second_run_stops_while_the_first_has_not_finished(self) -> None:
+        with db.session(self.db_path) as conn:
+            db.insert_row(conn, "pipeline_runs", {"started_at": db.now(), "mode": "review-only"})  # never ends
+        report = self.run_pipeline(make_config())
+        self.assertEqual(report.tailored, 0)
+        self.assertIn("has not finished", report.errors[0])
+        with db.session(self.db_path) as conn:
+            self.assertIsNotNone(db.get_row(conn, "pipeline_runs", report.run_id)["finished_at"])
+            long_ago = (datetime.now(timezone.utc) - timedelta(hours=5)).replace(microsecond=0).isoformat()
+            conn.execute("UPDATE pipeline_runs SET started_at = ?", (long_ago,))
+        self.assertEqual(self.run_pipeline(make_config()).tailored, 1)  # a run that died long ago blocks nothing
 
     def test_run_is_recorded_for_audit(self) -> None:
         report = self.run_pipeline(make_config())

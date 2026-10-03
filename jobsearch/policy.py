@@ -29,6 +29,9 @@ SEND = "send"
 QUEUE = "queue"
 SKIP = "skip"
 
+# Postings that are a piece of work to take on, not a job to apply for.
+FREELANCE_TYPES = ("freelance", "contract")
+
 # Placeholders boards use when they have not filled the location in.
 UNKNOWN_LOCATIONS = {
     "n/a", "n a", "na", "none", "tbd", "tba", "unknown", "various",
@@ -153,9 +156,12 @@ class PolicyContext:
             if row["company"]:
                 per_company[_norm(row["company"])] = int(row["n"])
 
+        # A draft counts: the same role listed twice (a company's board and an internship
+        # list) must not be tailored, and then sent, a second time.
         applied: set[str] = set()
         for row in conn.execute(
-            "SELECT company, role FROM applications WHERE status IN ('approved','sent','responded')"
+            "SELECT company, role FROM applications "
+            "WHERE status IN ('drafted','approved','sent','responded')"
         ):
             applied.add(_pair(row["company"], row["role"]))
         return cls(
@@ -163,6 +169,10 @@ class PolicyContext:
             per_company_week=per_company,
             applied_fingerprints=applied,
         )
+
+    def record_application(self, company: str | None, role: str | None) -> None:
+        """Note that this run now has an application for the role."""
+        self.applied_fingerprints.add(_pair(company, role))
 
     def record_sent(self, company: str | None) -> None:
         self.sent_today += 1
@@ -348,14 +358,19 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     if word:
         return Decision(SKIP, [f"title has the excluded word '{word}'"])
 
+    # A gig is judged on what it asks and where, not on the level and role names meant
+    # for jobs: the posting for a Python script is not titled "Software Engineer Intern".
+    freelance = search.include_freelance and job.get("employment_type") in FREELANCE_TYPES
+
     if (
         search.require_title_keywords
+        and not freelance
         and job.get("employment_type") != "internship"  # a source that says so is as good as the title
         and not title_word(title, search.require_title_keywords)
     ):
         return Decision(SKIP, [f"title '{title}' names none of the levels you asked for"])
 
-    if not title_matches(title, search.titles):
+    if not freelance and not title_matches(title, search.titles):
         return Decision(SKIP, [f"title '{title}' does not match any configured title"])
 
     if search.max_experience_years is not None:
@@ -377,16 +392,19 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     if _too_old(job.get("posted_at"), search.max_age_days):
         return Decision(SKIP, [f"posted {job.get('posted_at')}, older than {search.max_age_days} days"])
 
+    if job.get("deadline") and str(job["deadline"])[:10] < date.today().isoformat():
+        return Decision(SKIP, [f"the deadline, {str(job['deadline'])[:10]}, has passed"])
+
     if _pair(company, title) in context.applied_fingerprints:
-        return Decision(SKIP, ["already applied to this role"])
+        return Decision(SKIP, ["already have an application for this role"])
 
     fit = job.get("fit_score")
     if fit is not None and fit < search.min_fit:
         return Decision(SKIP, [f"fit {fit:.0f} below min_fit {search.min_fit:.0f}"])
 
-    if context.tailored_this_run >= config.limits.max_tailor_per_run:
-        return Decision(SKIP, [f"hit max_tailor_per_run ({config.limits.max_tailor_per_run})"])
-
+    # The per-run cap on tailoring is not checked here. A posting that passes is
+    # wanted whether or not this run has room for it, and run() leaves it scored for
+    # the next one. Skipping it here took it off the list for good.
     reasons = [f"fit {fit:.0f}" if fit is not None else "not scored yet"]
     return Decision(QUEUE, reasons)
 

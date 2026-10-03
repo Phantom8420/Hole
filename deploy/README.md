@@ -26,6 +26,31 @@ Things that bit during setup:
 
 Update: `cd ~/Hole && git pull && sudo systemctl restart jobsearch`.
 
+**The daily run.** `jobsearch-run.service` is one pipeline run (`python -m jobsearch run`)
+and `jobsearch-run.timer` starts it every day at 12:00 GMT, so the lists refresh and drafts
+get written without anyone opening an app. Install both once:
+
+    sudo cp deploy/oracle/jobsearch-run.service deploy/oracle/jobsearch-run.timer /etc/systemd/system/
+    sudo systemctl daemon-reload && sudo systemctl enable --now jobsearch-run.timer
+    systemctl list-timers jobsearch-run.timer        # the next time it fires
+
+A run can also be started on request: the dashboard's "Update listings now" button, the
+desktop app's "Update listings" button, or `POST /api/run` with the ingest token. Two runs
+never overlap, however they start.
+
+The two endpoints are what an app (the desktop one, or a phone one) needs, both with
+`Authorization: Bearer <JOBSEARCH_API_TOKEN>` and both answering 404 until that is set:
+
+- `POST /api/run`: 202 `{"started": true, "running": true}` when a run begins, 409 with
+  `"running": true` when one is already going.
+- `GET /api/status`: `{"running", "run": {"id", "started_at", "finished_at", "sourced",
+  "tailored", "queued", "sent", "errors", ...}, "next_run_at", "run_at", "timezone",
+  "auto_apply", "counts": {"remaining", "drafted", "applied", "sent", "freelance"},
+  "caps": {...}}`. `remaining` is what is open and not yet applied to, `applied` what you
+  said yes to, whether or not it has gone out. The time is set in two places that must agree, the timer's `OnCalendar` and
+`[schedule] run_at` in `config.toml`, which is what the dashboard and the apps announce;
+`tests/test_deploy.py` checks the shipped files against each other.
+
 ## Vercel (`deploy/vercel/`)
 
 A rewrite-only project: every request is proxied to the Oracle origin, so the public

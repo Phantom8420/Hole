@@ -69,11 +69,34 @@ class SearchConfig:
     require_title_keywords: list[str] = field(default_factory=list)
     # Most years of experience a posting may ask for; None means do not look.
     max_experience_years: int | None = None
+    # True: a freelance or contract posting skips the title and level rules above, which
+    # are written for jobs, and is judged on the rest. False: screened like any posting.
+    include_freelance: bool = False
     # Calibrated against real board data: across 544 live Stripe postings a
     # backend profile scored 0 on sales roles, ~7 median, and 35-43 on the
     # genuinely matching engineering roles. 30 sits just under that top band.
     min_fit: float = 30.0
     max_age_days: int = 30
+
+
+DEFAULT_RUN_AT = "12:00"
+
+
+def _clock(value: Any, default: str = DEFAULT_RUN_AT) -> str:
+    """"H:MM" or "HH:MM" as a zero-padded "HH:MM", or the default when it is neither."""
+    text = str(value if value is not None else "").strip()
+    hour, sep, minute = text.partition(":")
+    if sep and hour.isdigit() and minute.isdigit() and int(hour) < 24 and int(minute) < 60 and len(minute) == 2:
+        return f"{int(hour):02d}:{minute}"
+    return default
+
+
+@dataclass
+class ScheduleConfig:
+    # When the unattended run starts each day, as HH:MM in GMT. What starts it is the
+    # timer on the server (deploy/oracle/jobsearch-run.timer); this is what the dashboard
+    # and the apps say, and tests/test_deploy.py pins the two to each other.
+    run_at: str = DEFAULT_RUN_AT
 
 
 @dataclass
@@ -153,6 +176,7 @@ class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     dispatch: DispatchConfig = field(default_factory=DispatchConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     sources: dict[str, SourceConfig] = field(default_factory=dict)
     path: Path | None = None
 
@@ -202,6 +226,7 @@ class Config:
                 if _get(raw, "search.max_experience_years") is None
                 else max(0, int(_get(raw, "search.max_experience_years")))
             ),
+            include_freelance=bool(_get(raw, "search.include_freelance", False)),
             min_fit=float(_get(raw, "search.min_fit", 45.0)),
             max_age_days=int(_get(raw, "search.max_age_days", 30)),
         )
@@ -250,6 +275,7 @@ class Config:
             limits=limits,
             dispatch=dispatch,
             llm=llm_config,
+            schedule=ScheduleConfig(run_at=_clock(_get(raw, "schedule.run_at"))),
             sources=sources,
             path=path,
         )
