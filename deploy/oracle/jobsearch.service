@@ -1,0 +1,12 @@
+[Unit]
+Description=Job search web UI
+After=network-online.target
+[Service]
+User=opc
+WorkingDirectory=/home/opc/Hole
+Environment=JOBSEARCH_HOST=80-225-233-74.sslip.io
+ExecStart=/home/opc/Hole/.venv/bin/python -m jobsearch web --host 127.0.0.1 --port 8765 --no-browser
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
