@@ -162,13 +162,19 @@ def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- generic CRUD
 
 
-def insert_row(conn: sqlite3.Connection, table: str, data: dict[str, Any]) -> int:
+def insert_row(
+    conn: sqlite3.Connection, table: str, data: dict[str, Any], *, or_ignore: bool = False
+) -> int:
+    """Returns the new row's id, or 0 when `or_ignore` skipped a row that clashed."""
     payload = {k: v for k, v in data.items() if v is not None}
     if not payload:
         raise ValueError(f"Nothing to insert into {table}")
     columns = ", ".join(payload)
     placeholders = ", ".join(f":{k}" for k in payload)
-    cur = conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", payload)
+    verb = "INSERT OR IGNORE" if or_ignore else "INSERT"
+    cur = conn.execute(f"{verb} INTO {table} ({columns}) VALUES ({placeholders})", payload)
+    if or_ignore and not cur.rowcount:
+        return 0
     return int(cur.lastrowid)
 
 

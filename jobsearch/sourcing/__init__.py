@@ -101,12 +101,18 @@ def store(conn: sqlite3.Connection, postings: list[Posting]) -> tuple[int, int]:
     discovered_at = db.now()
     new = 0
     duplicates = 0
+    # Not "insert and catch sqlite3.IntegrityError": Turso answers a duplicate with
+    # an ordinary reply that its client library trips over (a KeyError), so the
+    # first posting already stored used to end the whole run. OR IGNORE cannot
+    # raise, and one lookup saves a round trip for every known posting.
+    known = {row["fingerprint"] for row in conn.execute("SELECT fingerprint FROM jobs")}
     for posting in postings:
-        try:
-            db.insert_row(conn, "jobs", posting.to_row(discovered_at))
-            new += 1
-        except sqlite3.IntegrityError:
+        row = posting.to_row(discovered_at)
+        if row["fingerprint"] in known or not db.insert_row(conn, "jobs", row, or_ignore=True):
             duplicates += 1
+        else:
+            known.add(row["fingerprint"])
+            new += 1
     return new, duplicates
 
 
