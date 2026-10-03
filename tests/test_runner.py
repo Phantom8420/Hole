@@ -88,6 +88,19 @@ class RunBookkeepingTests(RunCase):
         live = self.run_row(now - timedelta(minutes=2))
         self.assertEqual(runner.running(self.conn, now)["id"], live)
 
+    def test_a_run_is_judged_by_its_last_sign_of_life_not_its_start(self) -> None:
+        now = datetime.now(UTC)
+        beat = lambda minutes: (now - timedelta(minutes=minutes)).replace(microsecond=0).isoformat()  # noqa: E731
+        long_running = self.run_row(now - timedelta(hours=3), heartbeat_at=beat(5))
+        self.assertEqual(runner.running(self.conn, now)["id"], long_running)  # three hours in, beating
+        self.conn.execute("UPDATE pipeline_runs SET heartbeat_at = ?", (beat(90),))
+        self.assertIsNone(runner.running(self.conn, now))  # silent for an hour and a half: dead
+        # one from before beats were kept falls back to its start
+        old = self.run_row(now - timedelta(minutes=20))
+        self.assertEqual(runner.running(self.conn, now)["id"], old)
+        later = self.run_row(now)
+        self.assertEqual(runner.other_in_progress(self.conn, later, now)["id"], old)
+
     def test_timestamps_without_a_zone_are_read_as_gmt(self) -> None:
         self.assertEqual(runner._utc("2026-10-03T12:00:00"), datetime(2026, 10, 3, 12, 0, tzinfo=UTC))
         self.assertEqual(runner._utc("2026-10-03T12:00:00+00:00"), datetime(2026, 10, 3, 12, 0, tzinfo=UTC))

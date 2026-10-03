@@ -898,6 +898,24 @@ class PipelineTests(TempDbCase):
         self.assertEqual(self.statuses(), ["failed", "tailored"])
         self.assertEqual(report.tailored, 1)
 
+    def test_a_run_that_raises_still_finishes_its_row_and_says_why(self) -> None:
+        with mock.patch.object(pipeline, "score_jobs", side_effect=RuntimeError("the database went away")):
+            with db.session(self.db_path) as conn:
+                with self.assertRaises(RuntimeError):
+                    pipeline.run(conn, make_config(), skip_sourcing=True)
+        with db.session(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertIsNotNone(row["finished_at"])  # so it does not read as a run still going
+        self.assertIn("the database went away", row["notes"])
+        self.assertEqual(row["errors"], 1)
+
+    def test_a_run_beats_while_it_works(self) -> None:
+        report = self.run_pipeline(make_config())
+        with db.session(self.db_path) as conn:
+            row = db.get_row(conn, "pipeline_runs", report.run_id)
+        self.assertIsNotNone(row["heartbeat_at"])
+        self.assertGreaterEqual(row["heartbeat_at"], row["started_at"])
+
     def test_a_second_run_stops_while_the_first_has_not_finished(self) -> None:
         with db.session(self.db_path) as conn:
             db.insert_row(conn, "pipeline_runs", {"started_at": db.now(), "mode": "review-only"})  # never ends

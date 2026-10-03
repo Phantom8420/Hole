@@ -24,9 +24,14 @@ from typing import Any
 from . import worklists
 from .config import Config
 
-# A run that has not finished after this long is taken to have died. The longest one yet
-# was minutes, but tailoring and applying to a few dozen postings can take an hour or two.
-STALE_AFTER = timedelta(hours=4)
+# A run that has not shown a sign of life for this long is taken to have died. A run
+# beats at every stage and before each posting it tailors, and its quietest stretch (reading
+# the boards, or writing thousands of new postings) has been about ten minutes.
+STALE_AFTER = timedelta(hours=1)
+
+# Alive means finished_at is empty and the last beat (or, for a run from before beats were
+# kept, its start) is recent.
+_LAST_SIGN = "COALESCE(heartbeat_at, started_at)"
 
 
 def _utc(value: str | None) -> datetime | None:
@@ -50,7 +55,7 @@ def other_in_progress(conn: Any, own_id: int, now: datetime | None = None) -> di
     """
     cutoff = ((now or datetime.now(timezone.utc)) - STALE_AFTER).replace(microsecond=0).isoformat()
     row = conn.execute(
-        "SELECT * FROM pipeline_runs WHERE id < ? AND finished_at IS NULL AND started_at > ? "
+        f"SELECT * FROM pipeline_runs WHERE id < ? AND finished_at IS NULL AND {_LAST_SIGN} > ? "  # noqa: S608
         "ORDER BY id LIMIT 1",
         (own_id, cutoff),
     ).fetchone()
@@ -61,7 +66,7 @@ def running(conn: Any, now: datetime | None = None) -> dict[str, Any] | None:
     """The run in progress, if there is one."""
     cutoff = ((now or datetime.now(timezone.utc)) - STALE_AFTER).replace(microsecond=0).isoformat()
     row = conn.execute(
-        "SELECT * FROM pipeline_runs WHERE finished_at IS NULL AND started_at > ? "
+        f"SELECT * FROM pipeline_runs WHERE finished_at IS NULL AND {_LAST_SIGN} > ? "  # noqa: S608
         "ORDER BY id DESC LIMIT 1",
         (cutoff,),
     ).fetchone()

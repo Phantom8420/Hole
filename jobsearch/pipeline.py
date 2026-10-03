@@ -497,7 +497,7 @@ def run(
     report = RunReport(mode=mode)
 
     report.run_id = db.insert_row(
-        conn, "pipeline_runs", {"started_at": db.now(), "mode": mode}
+        conn, "pipeline_runs", {"started_at": db.now(), "heartbeat_at": db.now(), "mode": mode}
     )
     conn.commit()
 
@@ -510,16 +510,52 @@ def run(
         _finish(conn, report)
         return report
 
+    try:
+        _stages(conn, config, report, dry_run=dry_run, skip_sourcing=skip_sourcing, limit=limit)
+    except BaseException as exc:
+        # Whatever stopped it, the row must say so: one that never finishes reads as a run
+        # still going, and holds off the next.
+        report.fail(f"the run stopped: {type(exc).__name__}: {exc}")
+        try:
+            _finish(conn, report)
+        except Exception:
+            pass
+        raise
+    _finish(conn, report)
+    return report
+
+
+def _beat(conn: sqlite3.Connection, report: RunReport) -> None:
+    """Say the run is still alive. Best effort: a run must not die of its own pulse."""
+    if not report.run_id:
+        return
+    try:
+        db.update_row(conn, "pipeline_runs", report.run_id, {"heartbeat_at": db.now()})
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _stages(
+    conn: sqlite3.Connection,
+    config: Config,
+    report: RunReport,
+    *,
+    dry_run: bool,
+    skip_sourcing: bool,
+    limit: int | None,
+) -> None:
     g = graph.ProfileGraph.load(conn)
     if g.is_empty():
         report.fail("The profile graph is empty -- import your history before running.")
-        _finish(conn, report)
-        return report
+        return
 
     if not skip_sourcing:
         source_jobs(conn, config, report)
         source_competitions(conn, report)
+        _beat(conn, report)
     score_jobs(conn, g, report)
+    _beat(conn, report)
 
     context = policy.PolicyContext.load(conn)
     candidates = sourcing.list_jobs(conn, status="scored")
@@ -549,6 +585,7 @@ def run(
             continue  # a gig is listed for you to look at, not tailored or applied to for you
         if context.tailored_this_run >= ceiling or model_down:
             continue  # stays scored, so the next run takes it
+        _beat(conn, report)
         if not process_job(conn, config, g, job, context, report, dry_run=dry_run):
             model_down = True
             report.note("  the model is out of quota or unavailable; the rest wait for the next run")
@@ -559,8 +596,6 @@ def run(
             skips,
         )
     conn.commit()
-    _finish(conn, report)
-    return report
 
 
 def _finish(conn: sqlite3.Connection, report: RunReport) -> None:

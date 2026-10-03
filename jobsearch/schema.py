@@ -400,6 +400,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id INTEGER PRIMARY KEY,
     started_at TEXT NOT NULL,
+    heartbeat_at TEXT,                -- last sign of life; a run silent for an hour is taken to have died
     finished_at TEXT,
     mode TEXT,                        -- autonomous / review-only / dry-run
     sourced INTEGER NOT NULL DEFAULT 0,
