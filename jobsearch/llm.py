@@ -57,6 +57,12 @@ API_KEY_ENV = {
     ANTHROPIC: ("ANTHROPIC_API_KEY",),
 }
 
+# The only keys library code may pull from .env. Everything else in it (TURSO_*,
+# JOBSEARCH_PASSWORD, ...) is for a real CLI invocation, which loads the lot in
+# main(). Code that merely wants to know the model provider must not be able to
+# repoint the process at a database, or arm a password check a test expects unset.
+LLM_ENV_KEYS = frozenset({"JOBSEARCH_LLM_PROVIDER", *(n for names in API_KEY_ENV.values() for n in names)})
+
 INSTALL_HINT = {
     GEMINI: "pip install google-genai",
     ANTHROPIC: "pip install anthropic",
@@ -91,13 +97,15 @@ class ModelError(RuntimeError):
     """Anything that stopped us getting usable text back."""
 
 
-def load_dotenv(path: Path | None = None) -> None:
+def load_dotenv(path: Path | None = None, *, only: frozenset[str] | None = None) -> None:
     """Minimal .env support so API keys don't have to live in the shell profile.
 
     The file is optional, so nothing here may raise. The existence check and the
     read are inherently a race, and on a OneDrive-backed path a file can be
     listed but not readable -- either way, "no .env" is a normal state, not an
     error worth propagating to a caller that only wanted to know the provider.
+
+    `only` limits which keys are taken; library code passes LLM_ENV_KEYS.
     """
     env_path = path or (PROJECT_ROOT / ".env")
     try:
@@ -111,6 +119,8 @@ def load_dotenv(path: Path | None = None) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip("'\"")
+        if only is not None and key not in only:
+            continue
         if key and key not in os.environ:
             os.environ[key] = value
 
@@ -125,7 +135,7 @@ def api_key_for(provider: str) -> str | None:
 
 def resolve_provider(explicit: str | None = None) -> str:
     """Explicit argument, then env var, then whichever key exists, then Gemini."""
-    load_dotenv()
+    load_dotenv(only=LLM_ENV_KEYS)
     candidate = (explicit or os.environ.get("JOBSEARCH_LLM_PROVIDER") or "").strip().lower()
     if candidate:
         if candidate not in PROVIDERS:
@@ -313,7 +323,7 @@ def call(
     Never returns empty text -- an empty document is worse than an exception,
     because it looks like a successful run.
     """
-    load_dotenv()
+    load_dotenv(only=LLM_ENV_KEYS)
     chosen = resolve_provider(provider)
     chosen_model = model or DEFAULT_MODELS[chosen]
     caller = _call_gemini if chosen == GEMINI else _call_anthropic

@@ -20,7 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from jobsearch import cli, db  # noqa: E402
+from jobsearch import cli, db, llm  # noqa: E402
+from jobsearch.config import Config  # noqa: E402
 
 BOGUS_TURSO = "https://no-such-database.invalid"
 
@@ -76,6 +77,44 @@ class DotenvTests(unittest.TestCase):
                 code = self.run_main(["init", "--db", str(self.path)])
         self.assertEqual(code, 0)
         self.assertTrue(self.path.exists())
+
+
+class DotenvScopeTests(unittest.TestCase):
+    """Library code that only wants an API key must not import the rest of .env:
+    Config.problems() -> resolve_provider() used to take TURSO_* and the web
+    password along with it, which re-opened the leak and made a test that expects
+    "no password" start a real public server."""
+
+    def test_only_limits_the_keys_taken(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "GEMINI_API_KEY=k\nTURSO_DATABASE_URL=https://x.invalid\nJOBSEARCH_PASSWORD=pw\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {}, clear=True):
+                llm.load_dotenv(env_file, only=llm.LLM_ENV_KEYS)
+                self.assertEqual(os.environ.get("GEMINI_API_KEY"), "k")
+                self.assertNotIn("TURSO_DATABASE_URL", os.environ)
+                self.assertNotIn("JOBSEARCH_PASSWORD", os.environ)
+                llm.load_dotenv(env_file)  # a real invocation still takes everything
+                self.assertEqual(os.environ.get("TURSO_DATABASE_URL"), "https://x.invalid")
+
+    def test_provider_lookup_uses_the_narrow_load(self) -> None:
+        with mock.patch.object(llm, "load_dotenv") as loader, mock.patch.dict(os.environ, {}, clear=True):
+            llm.resolve_provider()
+        loader.assert_called_once_with(only=llm.LLM_ENV_KEYS)
+
+    def test_config_problems_cannot_arm_the_environment(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("TURSO_DATABASE_URL=https://x.invalid\nJOBSEARCH_PASSWORD=pw\n", encoding="utf-8")
+            real = llm.load_dotenv
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(llm, "load_dotenv", lambda path=None, **kw: real(env_file, **kw)):
+                Config().problems()
+                self.assertNotIn("TURSO_DATABASE_URL", os.environ)
+                self.assertNotIn("JOBSEARCH_PASSWORD", os.environ)
 
 
 class WebServesTursoByDefaultTests(unittest.TestCase):
