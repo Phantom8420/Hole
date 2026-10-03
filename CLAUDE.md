@@ -109,6 +109,15 @@ fresh db); columns added to an existing table after that DDL shipped go in
 Adding a column to an existing table needs *both* — the DDL for a fresh install, the
 additive entry for an existing one.
 
+## Deployment
+
+Production is Vercel (a stable URL that only proxies) -> Caddy on an Oracle Always Free
+VM -> `python -m jobsearch web` -> Turso; the files and the traps are in `deploy/`. The UI
+is rendered by the Python server, so there is no separate frontend deploy (the React bundle
+in `frontend/` is no longer routed). `POST /api/ingest` takes opportunities from a client
+that captured them elsewhere; it is off unless `JOBSEARCH_API_TOKEN` is set and needs
+`Authorization: Bearer <token>`.
+
 ## Codex config detected
 
 `~/.codex/config.toml` exists. Reply `/import` to scan it for importable items (MCP

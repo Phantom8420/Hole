@@ -1,0 +1,9 @@
+[Unit]
+Description=Caddy
+After=network-online.target
+[Service]
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Restart=always
+[Install]
+WantedBy=multi-user.target

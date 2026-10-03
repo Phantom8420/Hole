@@ -1,0 +1,2 @@
+# systemd units and the Caddyfile are read by Linux; CRLF in them is a parse error
+deploy/oracle/* text eol=lf

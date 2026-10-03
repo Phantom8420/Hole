@@ -18,6 +18,8 @@ Three protections, none of them optional:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -30,8 +32,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
-from .. import answers, db, pipeline
+from .. import answers, db, graph, matching, pipeline
 from ..config import Config
+from ..sourcing import competitions as competitions_sourcing
+from ..sourcing import store
+from ..sourcing.base import Posting
 from . import assets, evoque, evoque_pages, pages
 from .html import esc, layout
 
@@ -49,6 +54,18 @@ def _page(title: str, message: str, status: int = 400) -> tuple[int, str]:
 
 SESSION_COOKIE = "jobsearch_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
+
+INGEST_MAX_ITEMS = 200
+
+
+def _clean(value: Any, limit: int) -> str:
+    return value.strip()[:limit] if isinstance(value, str) else ""
+
+
+def _web_url(value: Any) -> str:
+    """Captured URLs end up in href attributes, so only http(s) gets through."""
+    url = _clean(value, 1000)
+    return url if url.lower().startswith(("http://", "https://")) else ""
 
 
 class App:
@@ -256,6 +273,107 @@ class App:
             return _page("Not found", f"No action at {path}", 404)
         finally:
             conn.close()
+
+    # ------------------------------------------------------------------ ingest
+
+    def ingest(self, payload: Any) -> tuple[int, dict[str, Any]]:
+        """Store opportunities the desktop app captured from its embedded browser.
+
+        Same destination as every other path in: jobs go through sourcing.store()
+        (fingerprint dedup, scored against the profile like `add_job`), and
+        competitions through competitions.save() (dedup on name). Nothing here
+        decides what is true about the candidate -- captured text is untrusted
+        input, length-capped and escaped at render time like any other posting.
+        """
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not items:
+            return 400, {"error": "expected {\"items\": [...]} with at least one item"}
+        if len(items) > INGEST_MAX_ITEMS:
+            return 413, {"error": f"at most {INGEST_MAX_ITEMS} items per request"}
+        source = _clean(payload.get("source"), 40) or "desktop"
+        categories = {value for value, _label in pages.COMPETITION_CATEGORIES}
+
+        postings: list[Posting] = []
+        opportunities: list[competitions_sourcing.Opportunity] = []
+        rejected = 0
+        for raw in items:
+            if not isinstance(raw, dict):
+                rejected += 1
+                continue
+            kind = raw.get("kind")
+            title = _clean(raw.get("title") or raw.get("name"), 300)
+            url = _web_url(raw.get("url"))
+            if kind == "job" and title and _clean(raw.get("company"), 200):
+                company = _clean(raw.get("company"), 200)
+                key = f"{source}:{url or title + company}"
+                postings.append(Posting(
+                    source=f"app:{source}",
+                    external_id=hashlib.sha1(key.encode()).hexdigest()[:16],
+                    company=company,
+                    title=title,
+                    location=_clean(raw.get("location"), 200),
+                    url=url,
+                    description=_clean(raw.get("description"), 20000),
+                ))
+            elif kind == "competition" and title:
+                category = _clean(raw.get("category"), 40)
+                tracks = raw.get("tracks")
+                opportunities.append(competitions_sourcing.Opportunity(
+                    name=title,
+                    category=category if category in categories else "other",
+                    description=_clean(raw.get("description"), 2000) or None,
+                    url=url or None,
+                    apply_url=_web_url(raw.get("apply_url")) or url or None,
+                    deadline=_clean(raw.get("deadline"), 100) or None,
+                    tracks=[_clean(t, 60) for t in tracks[:10]] if isinstance(tracks, list) else [],
+                    source=f"app:{source}",
+                ))
+            else:
+                rejected += 1
+
+        conn = self._connect()
+        try:
+            new_jobs, duplicate_jobs = store(conn, postings)
+            conn.commit()
+            if new_jobs:
+                self._score_new(conn, postings)
+            added, skipped = competitions_sourcing.save(conn, opportunities)
+        finally:
+            conn.close()
+        return 200, {
+            "jobs": {"new": new_jobs, "duplicate": duplicate_jobs},
+            "competitions": {"new": added, "duplicate": skipped},
+            "rejected": rejected,
+        }
+
+    @staticmethod
+    def _score_new(conn: sqlite3.Connection, postings: list[Posting]) -> None:
+        """Fit score for just-stored postings, in a couple of round trips (the
+        database may be remote). A blank profile leaves them `new`, which the
+        next `run` scores like any other."""
+        g = graph.ProfileGraph.load(conn)
+        if g.is_empty():
+            return
+        docs = g.match_docs()
+        by_fingerprint = {p.fingerprint(): p for p in postings}
+        fingerprints = list(by_fingerprint)
+        updates = []
+        for start in range(0, len(fingerprints), 100):
+            chunk = fingerprints[start:start + 100]
+            marks = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT id, fingerprint FROM jobs WHERE status = 'new' AND fingerprint IN ({marks})",  # noqa: S608
+                chunk,
+            ).fetchall()
+            for row in rows:
+                posting = by_fingerprint[row["fingerprint"]]
+                fit = matching.fit_score(f"{posting.title}\n{posting.description}", docs)
+                updates.append({"fit_score": fit, "status": "scored", "id": int(row["id"])})
+        if updates:
+            conn.executemany(
+                "UPDATE jobs SET fit_score = :fit_score, status = :status WHERE id = :id", updates
+            )
+            conn.commit()
 
     # ------------------------------------------------------------------ actions
 
@@ -522,10 +640,13 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
             if host in ALLOWED_HOSTS_SUFFIX or host == "":
                 return True
             # A deployment answers on its own domain, so the rebinding check
-            # cannot be "loopback only" there. It becomes "the host I was told
-            # to expect" instead -- still a fixed allow-list, never a wildcard.
-            expected = os.environ.get("JOBSEARCH_HOST", "").strip().lower()
-            return bool(expected) and host == expected
+            # cannot be "loopback only" there. It becomes "the hosts I was told
+            # to expect" instead (comma-separated: the origin plus any proxy in
+            # front of it) -- still a fixed allow-list, never a wildcard.
+            expected = {
+                h.strip() for h in os.environ.get("JOBSEARCH_HOST", "").lower().split(",") if h.strip()
+            }
+            return host in expected
 
         def _send(self, status: int, body: str) -> None:
             payload = body.encode("utf-8")
@@ -573,6 +694,47 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", "0")
             self.end_headers()
 
+        def _json(self, status: int, payload: dict[str, Any]) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _ingest(self) -> None:
+            """POST /api/ingest -- token-authenticated, no cookies involved, so
+            there is no ambient credential for another site to ride on (which is
+            why it skips the CSRF form token). Off unless JOBSEARCH_API_TOKEN is
+            set, and then it answers 404 like any unknown path."""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= 1_000_000:
+                self._json(413 if length > 0 else 400, {"error": "bad or oversized body"})
+                return
+            # Read the body before deciding anything: answering and closing with
+            # unread request data makes Windows reset the connection, and the
+            # client never sees the status.
+            raw = self.rfile.read(length)
+            token = os.environ.get("JOBSEARCH_API_TOKEN", "")
+            if not token:
+                self._json(404, {"error": "not found"})
+                return
+            auth = self.headers.get("Authorization") or ""
+            supplied = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+            if not secrets.compare_digest(supplied, token):
+                self._json(401, {"error": "bad token"})
+                return
+            try:
+                payload = json.loads(raw or b"null")
+            except ValueError:
+                self._json(400, {"error": "body is not JSON"})
+                return
+            self._json(*app.ingest(payload))
+
         def _session_token(self) -> str:
             jar: SimpleCookie = SimpleCookie()
             jar.load(self.headers.get("Cookie", ""))
@@ -596,7 +758,10 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
             morsel["httponly"] = True
             morsel["path"] = "/"
             morsel["samesite"] = "Lax"
-            if app.public:
+            # A TLS-terminating proxy (Caddy, then Vercel) in front of a loopback
+            # bind never makes `app.public` true, but it does say the browser
+            # spoke https. That header can only make the cookie stricter.
+            if app.public or self.headers.get("X-Forwarded-Proto", "").lower() == "https":
                 morsel["secure"] = True
             if clear:
                 morsel["max-age"] = 0
@@ -633,6 +798,9 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             if not self._host_ok():
                 self._send(*_page("Blocked", "Unexpected Host header.", 403))
+                return
+            if urllib.parse.urlparse(self.path).path == "/api/ingest":
+                self._ingest()
                 return
             length = int(self.headers.get("Content-Length") or 0)
             if length > 1_000_000:
