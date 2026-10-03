@@ -66,6 +66,22 @@ exclude_keywords = ["security clearance", "unpaid", "commission only"]
 #   ["senior", "sr.", "staff", "principal", "lead", "manager", "director"]
 exclude_title_keywords = []
 
+# The opposite: drop a posting unless its TITLE has one of these as a whole word
+# ("intern" does not match "Internal" or "International"). This is how a student
+# keeps to roles open to a student. Empty means any level passes. For example:
+#   ["intern", "internship", "co-op", "trainee", "apprentice", "apprenticeship",
+#    "student", "fellowship"]
+# and put "new grad", "graduate", "early career" and "phd" in exclude_title_keywords
+# above, since those need a finished degree.
+require_title_keywords = []
+
+# Most years of experience a posting may ask for, read from phrases such as
+# "3+ years of experience" or "at least 2 years". A posting that names several
+# figures is judged by the smallest, so a stray "10 years" about the team does not
+# sink it, and "2 years of university" is schooling, not experience. 0 means none
+# at all; leave it out and nothing is checked.
+# max_experience_years = 1
+
 # Fit score floor, 0-100. Measures how much of what a posting most insists on
 # your record actually covers.
 #
@@ -78,7 +94,9 @@ exclude_title_keywords = []
 # before changing this. Do not assume 80 means "good"; nothing scores 80.
 min_fit = 30
 
-# Ignore postings older than this.
+# Ignore postings older than this. A company board lists only what is still open,
+# and internships stay open for months, so a short window hides live ones: a
+# 38-day-old Stripe internship was dropped at 30. Raise it if you look for those.
 max_age_days = 30
 
 # ---------------------------------------------------------------- where to look

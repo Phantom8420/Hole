@@ -56,6 +56,11 @@ class SearchConfig:
     # Whole words, checked against the title only. For seniority: "senior" in a
     # description is usually "work with senior engineers", in a title it is the job.
     exclude_title_keywords: list[str] = field(default_factory=list)
+    # Whole words, title only, and the title must have at least one: how a student
+    # keeps to internships ("intern", "co-op", ...). Empty means any level.
+    require_title_keywords: list[str] = field(default_factory=list)
+    # Most years of experience a posting may ask for; None means do not look.
+    max_experience_years: int | None = None
     # Calibrated against real board data: across 544 live Stripe postings a
     # backend profile scored 0 on sales roles, ~7 median, and 35-43 on the
     # genuinely matching engineering roles. 30 sits just under that top band.
@@ -179,6 +184,14 @@ class Config:
             exclude_title_keywords=[
                 k.lower() for k in _str_list(_get(raw, "search.exclude_title_keywords"))
             ],
+            require_title_keywords=[
+                k.lower() for k in _str_list(_get(raw, "search.require_title_keywords"))
+            ],
+            max_experience_years=(
+                None
+                if _get(raw, "search.max_experience_years") is None
+                else max(0, int(_get(raw, "search.max_experience_years")))
+            ),
             min_fit=float(_get(raw, "search.min_fit", 45.0)),
             max_age_days=int(_get(raw, "search.max_age_days", 30)),
         )
