@@ -4,6 +4,7 @@
   "buildCommand": null,
   "outputDirectory": "public",
   "rewrites": [
+    { "source": "/", "destination": "https://80-225-233-74.sslip.io/" },
     { "source": "/:path*", "destination": "https://80-225-233-74.sslip.io/:path*" }
   ],
   "headers": [
