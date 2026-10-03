@@ -313,10 +313,15 @@ class ContentTests(WebTestCase):
 
 class BindingTests(unittest.TestCase):
     def test_serve_refuses_a_public_interface(self) -> None:
-        for host in ("0.0.0.0", "192.168.1.10", ""):
-            with self.subTest(host=host):
-                with self.assertRaises(WebError):
-                    serve(host=host, open_browser=False)
+        # With a password in the environment these binds are allowed, and serve()
+        # would then run until killed -- so the test sets "no password" itself
+        # rather than trusting whatever the process inherited.
+        with mock.patch.dict(os.environ):
+            os.environ.pop("JOBSEARCH_PASSWORD", None)
+            for host in ("0.0.0.0", "192.168.1.10", ""):
+                with self.subTest(host=host):
+                    with self.assertRaises(WebError):
+                        serve(host=host, open_browser=False)
 
 
 if __name__ == "__main__":

@@ -69,7 +69,10 @@ def connect(db_path: str | os.PathLike[str] | None = None) -> sqlite3.Connection
     instead when TURSO_DATABASE_URL is set, so nothing is lost to a redeploy
     or spin-down on a host with no persistent disk (e.g. Render Free).
     """
-    turso_url = os.environ.get("TURSO_DATABASE_URL")
+    # A path someone named means that file. Turso is only what an unqualified
+    # call resolves to when it is configured -- never an override of a file, which
+    # is how a test run once wrote its fixtures into the production database.
+    turso_url = os.environ.get("TURSO_DATABASE_URL") if db_path is None else None
     if turso_url:
         from . import libsql_shim
 

@@ -129,7 +129,7 @@ def _report_counts(created: dict[str, int]) -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    turso_url = os.environ.get("TURSO_DATABASE_URL")
+    turso_url = None if args.db else os.environ.get("TURSO_DATABASE_URL")
     path = db.resolve_db_path(args.db)
     existed = path.exists()
     with db.session(args.db) as conn:
@@ -1140,8 +1140,9 @@ def cmd_web(args: argparse.Namespace) -> int:
     config = _load_config(args)
     if config is None:
         return 1
-    db_path = db.resolve_db_path(getattr(args, "db", None))
-    using_turso = bool(os.environ.get("TURSO_DATABASE_URL"))
+    explicit_db = getattr(args, "db", None)
+    db_path = db.resolve_db_path(explicit_db)
+    using_turso = bool(os.environ.get("TURSO_DATABASE_URL")) and not explicit_db
     if not using_turso and not db_path.is_file():
         _err(f"No database at {db_path}. Run `python -m jobsearch init` first.")
         return 1
@@ -1159,7 +1160,7 @@ def cmd_web(args: argparse.Namespace) -> int:
 
     try:
         serve(
-            db_path=db_path,
+            db_path=db_path if explicit_db else None,  # None lets Turso apply when it is configured
             config=config,
             host=args.host,
             port=args.port,
@@ -1859,9 +1860,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    from .llm import load_dotenv
+    if argv is None:
+        # Every command needs TURSO_*/JOBSEARCH_PASSWORD/etc from .env, not just
+        # `web` -- but only a real invocation reads it. Code that hands main() its
+        # own argv (the tests) must not inherit the production credentials.
+        from .llm import load_dotenv
 
-    load_dotenv()  # every command needs TURSO_*/JOBSEARCH_PASSWORD/etc from .env, not just `web`
+        load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

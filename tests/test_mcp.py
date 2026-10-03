@@ -52,6 +52,14 @@ class McpTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tmp.cleanup)
         self.db_path = Path(self.tmp.name) / "test.db"
 
+        # The MCP tools open the database through $JOBSEARCH_DB, so unlike the
+        # tests that pass a path, nothing but the environment keeps them off Turso.
+        patched = mock.patch.dict(os.environ)
+        patched.start()
+        self.addCleanup(patched.stop)
+        os.environ.pop("TURSO_DATABASE_URL", None)
+        os.environ.pop("TURSO_AUTH_TOKEN", None)
+
         self._prior_env = os.environ.get("JOBSEARCH_DB")
         os.environ["JOBSEARCH_DB"] = str(self.db_path)
         self.addCleanup(self._restore_env)
