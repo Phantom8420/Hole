@@ -10,6 +10,7 @@ const { sleep } = require('./driver');
 const { loadEnvFile } = require('./envfile');
 const { dedupe, extract } = require('./extractors');
 const { sendItems, tokenStore } = require('./ingest');
+const { describe, fetchStatus, startRun } = require('./pipeline');
 const { Limiter } = require('./limits');
 const { resolveServices, webUrl } = require('./services');
 const { Stage } = require('./stage');
@@ -157,6 +158,14 @@ function registerIpc() {
       total.rejected += result.rejected;
     }
     return total;
+  }));
+
+  // The pipeline runs on the server; these only ask it to start and how it stands.
+  const serverOptions = () => ({ holeUrl: settings.load().holeUrl, token: tokens.load() });
+  ipcMain.handle('pipeline:start', guarded(() => startRun(serverOptions())));
+  ipcMain.handle('pipeline:status', guarded(async () => {
+    const status = await fetchStatus(serverOptions());
+    return { ...describe(status), status };
   }));
 
   ipcMain.handle('settings:save', guarded(({ holeUrl, token }) => {

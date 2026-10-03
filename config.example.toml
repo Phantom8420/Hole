@@ -244,6 +244,14 @@ results_per_page = 50
 # blocks scraping. There is deliberately no LinkedIn connector either -- see the
 # note at the bottom of this file.
 
+# ---------------------------------------------------------------- when to run
+
+[schedule]
+# The unattended run starts every day at this time, GMT. What starts it is the timer on
+# the server (deploy/oracle/jobsearch-run.timer); change the two together. The dashboard
+# and the apps show this as the next run.
+run_at = "12:00"
+
 # ---------------------------------------------------------------- rate limits
 
 [limits]

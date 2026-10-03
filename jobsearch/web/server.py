@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
-from .. import answers, db, graph, matching, pipeline
+from .. import answers, db, graph, matching, pipeline, runner
 from ..config import Config
 from ..sourcing import competitions as competitions_sourcing
 from ..sourcing import store
@@ -58,6 +58,10 @@ SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 INGEST_MAX_ITEMS = 200
 
+# After starting a run, how long to refuse another start: the new process takes a few
+# seconds to record itself in pipeline_runs, and until it has, "is one running?" says no.
+RUN_START_GRACE_SECONDS = 90
+
 
 def _clean(value: Any, limit: int) -> str:
     return value.strip()[:limit] if isinstance(value, str) else ""
@@ -79,6 +83,7 @@ class App:
         self.password = ""
         self.public = False  # set by serve(); True adds Secure to the session cookie
         self._lock = threading.Lock()
+        self._run_started = float("-inf")
         self._sessions: dict[str, float] = {}
         self._session_lock = threading.Lock()
 
@@ -116,6 +121,29 @@ class App:
     def login_page(self, *, error: str = "") -> str:
         return evoque.login_document(error=error)
 
+    # ------------------------------------------------------------------ the pipeline
+
+    def api_status(self) -> tuple[int, dict[str, Any]]:
+        conn = self._connect()
+        try:
+            return 200, runner.status(conn, self._fresh_config())
+        finally:
+            conn.close()
+
+    def start_run(self) -> tuple[int, dict[str, Any]]:
+        """Begin a pipeline run unless one is going: 202 when it starts, 409 when one is."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                live = runner.running(conn)
+            finally:
+                conn.close()
+            if live or time.monotonic() - self._run_started < RUN_START_GRACE_SECONDS:
+                return 409, {"started": False, "running": True, "error": "a run is already going"}
+            runner.start(db.PROJECT_ROOT, db_path=self.db_path)
+            self._run_started = time.monotonic()
+            return 202, {"started": True, "running": True}
+
     # ------------------------------------------------------------------ helpers
 
     def _connect(self) -> sqlite3.Connection:
@@ -147,7 +175,7 @@ class App:
             # single source of the aggregation queries both used.
             one = lambda k: (query.get(k) or [""])[0]  # noqa: E731
             if not parts:
-                return 200, evoque_pages.dashboard(conn, self._fresh_config())
+                return 200, evoque_pages.dashboard(conn, self._fresh_config(), self.token)
             if parts == ["jobs"]:
                 return 200, evoque_pages.jobs(
                     conn,
@@ -216,6 +244,9 @@ class App:
         parts = [p for p in path.strip("/").split("/") if p]
         conn = self._connect()
         try:
+            if parts == ["run"]:
+                self.start_run()
+                return 303, "/"
             if len(parts) == 3 and parts[0] == "jobs" and parts[1].isdigit() and parts[2] == "tailor":
                 return self._tailor(conn, int(parts[1]))
             if len(parts) == 3 and parts[0] == "jobs" and parts[1].isdigit() and parts[2] == "applied":
@@ -762,6 +793,20 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _token_ok(self) -> bool:
+            """Whether the request carries the API token; if not, answers it and says no.
+            Off (a plain 404) until JOBSEARCH_API_TOKEN is set, like /api/ingest."""
+            token = os.environ.get("JOBSEARCH_API_TOKEN", "")
+            if not token:
+                self._json(404, {"error": "not found"})
+                return False
+            auth = self.headers.get("Authorization") or ""
+            supplied = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+            if not secrets.compare_digest(supplied, token):
+                self._json(401, {"error": "bad token"})
+                return False
+            return True
+
         def _ingest(self) -> None:
             """POST /api/ingest -- token-authenticated, no cookies involved, so
             there is no ambient credential for another site to ride on (which is
@@ -845,6 +890,10 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/login":
                 self._send(200, app.login_page())
                 return
+            if parsed.path == "/api/status":
+                if self._token_ok():
+                    self._json(*app.api_status())
+                return
             if not self._guard():
                 return
             query = urllib.parse.parse_qs(parsed.query)
@@ -860,6 +909,14 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
                 return
             if urllib.parse.urlparse(self.path).path == "/api/ingest":
                 self._ingest()
+                return
+            if urllib.parse.urlparse(self.path).path == "/api/run":
+                try:
+                    self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1_000_000))
+                except ValueError:
+                    pass  # read what was sent before answering, or Windows resets the connection
+                if self._token_ok():
+                    self._json(*app.start_run())
                 return
             length = int(self.headers.get("Content-Length") or 0)
             if length > 1_000_000:

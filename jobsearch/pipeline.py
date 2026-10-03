@@ -19,7 +19,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from . import answers, db, generate, graph, matching, policy, render, retrieval, sourcing, verify
+from . import answers, db, generate, graph, matching, policy, render, retrieval, runner, sourcing, verify
 from .sourcing import competitions as competitions_sourcing
 from .config import Config
 from .dispatch import DispatchResult, ats_form, email_gmail, find_apply_email
@@ -349,7 +349,10 @@ def process_job(
     report: RunReport,
     *,
     dry_run: bool,
-) -> None:
+) -> bool:
+    """Tailor one posting and decide whether to send it. False means the model is out of
+    quota or briefly down, so the run should stop asking it (the posting stays scored and
+    is tried again next run); True otherwise, however this posting itself went."""
     job_id = int(job["id"])
     job_description = _job_description(job)
 
@@ -367,14 +370,16 @@ def process_job(
         )
         report.screened_out += 1
         report.note(f"  skip  {job.get('company')} / {job.get('title')}: no matching experience")
-        return
+        return True
 
     try:
         result = generate.generate(job_description, plan)
     except generate.GenerationError as exc:
-        db.update_row(conn, "jobs", job_id, {"status": "failed", "skip_reason": str(exc)[:200]})
         report.fail(f"{job.get('company')} / {job.get('title')}: {exc}")
-        return
+        if exc.transient:
+            return False
+        db.update_row(conn, "jobs", job_id, {"status": "failed", "skip_reason": str(exc)[:200]})
+        return True
 
     context.tailored_this_run += 1
     report.tailored += 1
@@ -431,12 +436,15 @@ def process_job(
     )
     db.update_row(conn, "jobs", job_id, {"status": "tailored"})
     conn.commit()
+    # The same role is often listed twice (a company's board and an internship list), so
+    # a second posting of it in this run is not tailored or applied to again.
+    context.record_application(job.get("company"), job.get("title"))
 
     label = f"{job.get('company')} / {job.get('title')}"
     if not decision.sends:
         report.queued += 1
         report.note(f"  queue {label} (fit {plan.fit:.0f}) -- {'; '.join(decision.reasons)}")
-        return
+        return True
 
     dispatch_result = _dispatch(
         conn, config, job, plan, result, out_dir, slug, dry_run=dry_run
@@ -471,6 +479,7 @@ def process_job(
         report.queued += 1
         report.note(f"  queue {label} -- dispatch failed: {dispatch_result.detail}")
     conn.commit()
+    return True
 
 
 # --------------------------------------------------------------------------- entry point
@@ -488,20 +497,65 @@ def run(
     report = RunReport(mode=mode)
 
     report.run_id = db.insert_row(
-        conn, "pipeline_runs", {"started_at": db.now(), "mode": mode}
+        conn, "pipeline_runs", {"started_at": db.now(), "heartbeat_at": db.now(), "mode": mode}
     )
     conn.commit()
 
+    earlier = runner.other_in_progress(conn, report.run_id)
+    if earlier:
+        report.fail(
+            f"run {earlier['id']}, started {earlier['started_at']}, has not finished; stopping "
+            "so two runs do not tailor and apply to the same postings"
+        )
+        _finish(conn, report)
+        return report
+
+    try:
+        _stages(conn, config, report, dry_run=dry_run, skip_sourcing=skip_sourcing, limit=limit)
+    except BaseException as exc:
+        # Whatever stopped it, the row must say so: one that never finishes reads as a run
+        # still going, and holds off the next.
+        report.fail(f"the run stopped: {type(exc).__name__}: {exc}")
+        try:
+            _finish(conn, report)
+        except Exception:
+            pass
+        raise
+    _finish(conn, report)
+    return report
+
+
+def _beat(conn: sqlite3.Connection, report: RunReport) -> None:
+    """Say the run is still alive. Best effort: a run must not die of its own pulse."""
+    if not report.run_id:
+        return
+    try:
+        db.update_row(conn, "pipeline_runs", report.run_id, {"heartbeat_at": db.now()})
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _stages(
+    conn: sqlite3.Connection,
+    config: Config,
+    report: RunReport,
+    *,
+    dry_run: bool,
+    skip_sourcing: bool,
+    limit: int | None,
+) -> None:
     g = graph.ProfileGraph.load(conn)
     if g.is_empty():
         report.fail("The profile graph is empty -- import your history before running.")
-        _finish(conn, report)
-        return report
+        return
 
     if not skip_sourcing:
         source_jobs(conn, config, report)
         source_competitions(conn, report)
+        _beat(conn, report)
     score_jobs(conn, g, report)
+    _beat(conn, report)
 
     context = policy.PolicyContext.load(conn)
     candidates = sourcing.list_jobs(conn, status="scored")
@@ -517,6 +571,7 @@ def run(
     # immediately inside process_job(); that path is already rate-limited to
     # `ceiling` per run, so it was never the hot loop.
     skips: list[dict[str, Any]] = []
+    model_down = False
     for job in candidates:
         screened = policy.screen(job, config, context)
         if screened.action == policy.SKIP:
@@ -528,9 +583,12 @@ def run(
             continue
         if config.search.include_freelance and job.get("employment_type") in policy.FREELANCE_TYPES:
             continue  # a gig is listed for you to look at, not tailored or applied to for you
-        if context.tailored_this_run >= ceiling:
-            continue
-        process_job(conn, config, g, job, context, report, dry_run=dry_run)
+        if context.tailored_this_run >= ceiling or model_down:
+            continue  # stays scored, so the next run takes it
+        _beat(conn, report)
+        if not process_job(conn, config, g, job, context, report, dry_run=dry_run):
+            model_down = True
+            report.note("  the model is out of quota or unavailable; the rest wait for the next run")
 
     if skips:
         conn.executemany(
@@ -538,8 +596,6 @@ def run(
             skips,
         )
     conn.commit()
-    _finish(conn, report)
-    return report
 
 
 def _finish(conn: sqlite3.Connection, report: RunReport) -> None:

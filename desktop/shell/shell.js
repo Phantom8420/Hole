@@ -202,6 +202,45 @@ $('settings-form').addEventListener('submit', async (event) => {
   }
 });
 
+// ---------------------------------------------------------------- pipeline
+
+// The server runs the pipeline (daily at 12:00 GMT, and when asked). The toolbar shows how it
+// stands and can ask for a run now; asking again while one is going is harmless.
+
+let pollTimer = null;
+
+function showPipeline(text, kind = '') {
+  $('pipeline').textContent = text;
+  $('pipeline').title = text;
+  $('pipeline').className = `pipeline ${kind}`.trim();
+}
+
+async function refreshPipeline() {
+  let running = false;
+  try {
+    const result = await hole.runStatus();
+    running = result.running;
+    showPipeline(result.text, running ? 'running' : '');
+  } catch (err) {
+    showPipeline(cleanError(err), 'error');
+  }
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(refreshPipeline, running ? 5000 : 30000);
+}
+
+$('update').addEventListener('click', async () => {
+  $('update').disabled = true;
+  try {
+    const result = await hole.runStart();
+    showPipeline(result.started ? 'Started on the server; this takes a few minutes' : 'A run is already going', 'running');
+    setTimeout(refreshPipeline, 4000);
+  } catch (err) {
+    showPipeline(cleanError(err), 'error');
+  } finally {
+    $('update').disabled = false;
+  }
+});
+
 // ---------------------------------------------------------------- wiring
 
 $('back').addEventListener('click', () => hole.nav('back'));
@@ -252,4 +291,5 @@ window.addEventListener('resize', pushBounds);
   renderInbox();
   renderRail();
   await open('hole');
+  refreshPipeline();
 })();
