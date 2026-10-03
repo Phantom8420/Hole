@@ -59,6 +59,13 @@ exclude_companies = []
 # Drop any posting whose text contains one of these.
 exclude_keywords = ["security clearance", "unpaid", "commission only"]
 
+# Drop a posting whose TITLE has one of these as a whole word ("lead" does not
+# match "Leadership"). Seniority belongs here rather than in exclude_keywords,
+# which also reads the description and so drops every posting that mentions
+# "senior engineers" in passing. For example:
+#   ["senior", "sr.", "staff", "principal", "lead", "manager", "director"]
+exclude_title_keywords = []
+
 # Fit score floor, 0-100. Measures how much of what a posting most insists on
 # your record actually covers.
 #

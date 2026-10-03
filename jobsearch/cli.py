@@ -1242,6 +1242,8 @@ def cmd_config(args: argparse.Namespace) -> int:
         _out(f"  exclude_companies     {', '.join(config.search.exclude_companies)}")
     if config.search.exclude_keywords:
         _out(f"  exclude_keywords      {', '.join(config.search.exclude_keywords)}")
+    if config.search.exclude_title_keywords:
+        _out(f"  exclude in titles     {', '.join(config.search.exclude_title_keywords)}")
     _out("")
     _out("  sources")
     if not config.sources:
