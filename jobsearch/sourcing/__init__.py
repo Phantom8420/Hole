@@ -13,8 +13,8 @@ from typing import Any
 
 from .. import db
 from ..config import Config
-from . import aggregators, ats_boards, remote_boards
-from .base import Posting, SourceError, SourceResult, dedupe, html_to_text  # noqa: F401
+from . import aggregators, ats_boards, internship_lists, remote_boards
+from .base import STUB_MARKER, Posting, SourceError, SourceResult, dedupe, html_to_text  # noqa: F401
 
 __all__ = [
     "Posting",
@@ -23,6 +23,7 @@ __all__ = [
     "SourcingReport",
     "collect",
     "store",
+    "sync_open",
     "dedupe",
     "html_to_text",
 ]
@@ -33,15 +34,30 @@ class SourcingReport:
     postings: list[Posting] = field(default_factory=list)
     per_source: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    # For `sync_open`: the sources that listed everything they have open, the ids
+    # they listed, and the ids a source says have closed.
+    complete: set[str] = field(default_factory=set)
+    seen: dict[str, set[str]] = field(default_factory=dict)
+    closed: dict[str, set[str]] = field(default_factory=dict)
 
     def absorb(self, result: SourceResult) -> None:
         self.postings.extend(result.postings)
         self.per_source[result.source] = self.per_source.get(result.source, 0) + len(result.postings)
         self.errors.extend(result.errors)
+        if result.complete and not result.errors:
+            self.complete.add(result.source)
+            self.seen.setdefault(result.source, set()).update(str(p.external_id) for p in result.postings)
+        if result.closed_ids:
+            self.closed.setdefault(result.source, set()).update(str(i) for i in result.closed_ids)
 
 
-def collect(config: Config) -> SourcingReport:
-    """Run every enabled connector. A failing source never stops the others."""
+def collect(config: Config, *, known: dict[str, set[str]] | None = None) -> SourcingReport:
+    """Run every enabled connector. A failing source never stops the others.
+
+    `known` maps a source name to the ids already stored for it, for the sources
+    (the internship lists) that would otherwise fetch the same posting's text on
+    every run.
+    """
     report = SourcingReport()
     search = config.search
     keyword_query = " ".join(search.titles[:3] or search.keywords[:3])
@@ -68,6 +84,18 @@ def collect(config: Config) -> SourcingReport:
                         max_age_days=search.max_age_days,
                     )
                 )
+            elif source.name == "simplify":
+                report.absorb(
+                    internship_lists.fetch_simplify(
+                        search,
+                        terms=source.list_of("terms"),
+                        categories=source.list_of("categories"),
+                        degrees=source.list_of("degrees"),
+                        exclude_sponsorship=source.list_of("exclude_sponsorship"),
+                        limit=int(source.get("limit", 300)),
+                        known=(known or {}).get("simplify", ()),
+                    )
+                )
             elif source.name == "usajobs":
                 report.absorb(
                     aggregators.fetch_usajobs(
@@ -82,11 +110,11 @@ def collect(config: Config) -> SourcingReport:
                 # The aggregator boards take no credentials and no per-company
                 # slug -- they are one endpoint each, so enabling one is just
                 # naming it.
-                report.absorb(
-                    remote_boards.REMOTE_BOARDS[source.name](
-                        limit=int(source.get("limit", 100))
-                    )
-                )
+                options: dict[str, Any] = {"limit": int(source.get("limit", 100))}
+                if source.name == "arbeitnow":
+                    # Most of this board is on-site and in German-speaking Europe.
+                    options["remote_only"] = bool(source.get("remote_only", True))
+                report.absorb(remote_boards.REMOTE_BOARDS[source.name](**options))
             else:
                 report.errors.append(f"Unknown source '{source.name}' in config -- ignored.")
         except Exception as exc:  # a broken connector must not end the run
@@ -114,6 +142,58 @@ def store(conn: sqlite3.Connection, postings: list[Posting]) -> tuple[int, int]:
             known.add(row["fingerprint"])
             new += 1
     return new, duplicates
+
+
+# If a source now lists fewer than this share of what is stored as open, it is far more
+# likely to be an outage or an empty answer than every posting closing at once.
+MIN_STILL_LISTED = 0.5
+
+
+def sync_open(conn: sqlite3.Connection, report: SourcingReport) -> tuple[int, int]:
+    """Close what the sources no longer list, and reopen what came back.
+
+    Only for a source that listed everything it has open without a failure, or that
+    named the closed ones itself: a posting missing from a partial answer is not
+    closed. Only 'new' and 'scored' postings close (nothing to tell the user about a
+    skipped one, and a posting with a draft is theirs to look at). Returns
+    (closed, reopened).
+    """
+    gone: list[int] = []
+    back: list[int] = []
+    for source in sorted(report.complete):
+        seen = report.seen.get(source, set())
+        rows = conn.execute(
+            "SELECT id, external_id, status FROM jobs WHERE source = ?", (source,)
+        ).fetchall()
+        live = [r for r in rows if r["status"] != "closed"]
+        if live and len(seen) < len(live) * MIN_STILL_LISTED:
+            continue
+        gone += [
+            int(r["id"]) for r in live
+            if r["status"] in ("new", "scored") and str(r["external_id"]) not in seen
+        ]
+        back += [
+            int(r["id"]) for r in rows
+            if r["status"] == "closed" and str(r["external_id"]) in seen
+        ]
+    for source, ids in report.closed.items():
+        rows = conn.execute(
+            "SELECT id, external_id FROM jobs WHERE source = ? AND status IN ('new', 'scored')",
+            (source,),
+        ).fetchall()
+        gone += [int(r["id"]) for r in rows if str(r["external_id"]) in ids]
+    if gone:
+        conn.executemany(
+            "UPDATE jobs SET status = 'closed', skip_reason = 'no longer listed by the source' "
+            "WHERE id = :id",
+            [{"id": i} for i in dict.fromkeys(gone)],
+        )
+    if back:
+        conn.executemany(
+            "UPDATE jobs SET status = 'new', skip_reason = NULL, fit_score = NULL WHERE id = :id",
+            [{"id": i} for i in dict.fromkeys(back)],
+        )
+    return len(set(gone)), len(set(back))
 
 
 def list_jobs(

@@ -716,7 +716,7 @@ def _blocking_fields(page: Any) -> list[dict[str, Any]]:
                 // broader search marked every empty text field on the form as
                 // answered the moment a file attached -- which reads as "ready
                 // to submit" with the essays still blank.
-                const UPLOAD_LABEL = /resume|cv|attach|upload|portfolio/i;
+                const UPLOAD_LABEL = /resume|\\bcv\\b|attach|upload|portfolio/i;
                 const anyFile = root =>
                     [...root.querySelectorAll('input[type=file]')]
                         .some(f => f.files && f.files.length > 0);

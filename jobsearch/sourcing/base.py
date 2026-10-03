@@ -24,6 +24,11 @@ POLITE_DELAY_SECONDS = 0.6
 
 REMOTE_HINTS = ("remote", "anywhere", "distributed", "work from home", "wfh")
 
+# Ends a description a connector wrote itself because the posting's own text was out
+# of reach. The fit score measures a posting's words against a profile; a stub has
+# none worth measuring, so such a posting is left unscored rather than scored 0.
+STUB_MARKER = "(posting text not fetched)"
+
 
 class SourceError(RuntimeError):
     """A connector could not fetch. Never fatal -- the run continues without it."""
@@ -90,6 +95,8 @@ class Posting:
     description: str = ""
     compensation: str | None = None
     posted_at: str | None = None
+    # internship / full_time / part_time / contract / freelance, when the source says.
+    employment_type: str | None = None
 
     def __post_init__(self) -> None:
         if not self.apply_url:
@@ -117,6 +124,7 @@ class Posting:
             "description": self.description,
             "compensation": self.compensation,
             "posted_at": self.posted_at,
+            "employment_type": self.employment_type,
             "discovered_at": discovered_at,
             "fingerprint": self.fingerprint(),
             "status": "new",
@@ -133,6 +141,12 @@ class SourceResult:
     source: str
     postings: list[Posting] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # True when `postings` is everything the source has open, so a posting stored
+    # earlier and missing now has closed. A board that shows only its latest N cannot
+    # say that, and neither can a source that failed part of the way.
+    complete: bool = False
+    # Ids a source reports as closed, for the sources that can say so directly.
+    closed_ids: list[str] = field(default_factory=list)
 
 
 _session: requests.Session | None = None
@@ -152,12 +166,13 @@ def fetch_json(
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     method: str = "GET",
+    timeout: int = REQUEST_TIMEOUT,
 ) -> Any:
     """One polite request. Raises SourceError on anything that is not usable JSON."""
     time.sleep(POLITE_DELAY_SECONDS)
     try:
         response = session().request(
-            method, url, params=params, headers=headers, timeout=REQUEST_TIMEOUT
+            method, url, params=params, headers=headers, timeout=timeout
         )
     except requests.RequestException as exc:
         raise SourceError(f"{url}: {type(exc).__name__}: {exc}") from exc

@@ -73,17 +73,35 @@ _NON_US_COUNTRY_MARKERS = (
 )
 _NON_US_COUNTRY_TOKENS = {"uk", "england", "scotland", "wales"}
 
+# Cities that boards write on their own ("NYC", "Hybrid - San Francisco") with no
+# state or country beside them. Only the unambiguous ones: no "Cambridge" or
+# "Birmingham", which are as much English towns.
+US_CITIES = (
+    "new york", "nyc", "brooklyn", "manhattan", "san francisco", "south san francisco", "sf",
+    "los angeles", "san diego", "san jose", "palo alto", "menlo park", "mountain view",
+    "sunnyvale", "santa clara", "cupertino", "redwood city", "san mateo", "irvine",
+    "seattle", "bellevue", "redmond", "austin", "boston", "chicago", "atlanta", "denver",
+    "boulder", "washington dc", "pittsburgh", "philadelphia", "dallas", "houston", "miami",
+    "raleigh", "minneapolis", "salt lake city",
+)
+
 
 def _is_us_location(location_norm: str) -> bool:
-    if "united states" in location_norm or "usa" in location_norm.split():
+    # "US-WA-Bellevue", "DE-Berlin", "IN-Pune": a leading country code. Read as a
+    # state it made Germany "Delaware" and India "Indiana".
+    code = re.match(r"([a-z]{2})-", location_norm)
+    if code:
+        return code.group(1) == "us"
+    tokens = [t for t in re.split(r"[,\s/|()-]+", location_norm) if t]
+    if "united states" in location_norm or "usa" in tokens or "us" in tokens:
         return True
-    tokens = re.split(r"[,\s/|-]+", location_norm)
-    tokens = [t for t in tokens if t]
     # A non-US country named outright wins over a coincidental state-name match.
     if any(m in location_norm for m in _NON_US_COUNTRY_MARKERS) or (
         set(tokens) & _NON_US_COUNTRY_TOKENS
     ):
         return False
+    if any(_mentions(location_norm, city) for city in US_CITIES):
+        return True
     if any(t in US_STATE_NAMES for t in (" ".join(tokens[i : i + 2]) for i in range(len(tokens)))):
         return True
     # A 2-letter state code only counts next to a state-shaped rest of the
@@ -162,6 +180,57 @@ def _pair(company: str | None, role: str | None) -> str:
     return f"{_norm(company)}|{_norm(role)}"
 
 
+# What a remote posting says when it names no place at all.
+_PLACE_WORDS = re.compile(
+    r"\b(remote(ly)?|anywhere|worldwide|global(ly)?|distributed|wfh|work from home|home based|"
+    r"hybrid|flexible|in|or|any|of|the|from|with|and)\b"
+)
+
+
+def _mentions(location_norm: str, place: str) -> bool:
+    """`place` as a whole word or phrase: "india" is not in "indiana"."""
+    wanted = _norm(place)
+    return bool(wanted) and re.search(rf"(?<!\w){re.escape(wanted)}(?!\w)", location_norm) is not None
+
+
+def location_skip(location: str | None, remote: bool, search: Any) -> str | None:
+    """Why a posting's place rules it out, or None when it stands.
+
+    One answer for screen() and for the connectors that would rather not fetch or
+    store what screen() is going to drop. `search` is a SearchConfig.
+    """
+    norm = _norm(location)
+    banned = next((p for p in search.exclude_locations if _mentions(norm, p)), None)
+    if banned:
+        return f"location '{location}' is on the excluded list ({banned})"
+    # Boards commonly emit "N/A" or leave it blank. Unknown is not the same as
+    # wrong -- let the fit score decide those rather than dropping them.
+    if not search.locations or not norm or norm in UNKNOWN_LOCATIONS:
+        return None
+
+    def wanted(configured: str) -> bool:
+        if _mentions(norm, configured):
+            return True
+        return _norm(configured) == "united states" and _is_us_location(norm)
+
+    if remote:
+        if not search.locations_apply_to_remote:
+            return None
+        # "Remote" and "Worldwide" name no place, so they stand; "Remote in Canada"
+        # has to be open to somewhere on the list. The list's own "Remote" entry is
+        # not a place, or every remote posting would pass on it.
+        if not _PLACE_WORDS.sub(" ", norm).strip(" -,/()|"):
+            return None
+        places = [p for p in search.locations if _norm(p) not in {"remote", "anywhere", "worldwide"}]
+        if places and not any(wanted(place) for place in places):
+            return f"remote, but only from '{location}', outside the configured list"
+        return None
+
+    if not any(wanted(place) for place in search.locations):
+        return f"location '{location}' is outside the configured list"
+    return None
+
+
 # --------------------------------------------------------------------------- screening
 
 
@@ -188,7 +257,7 @@ def title_matches(title: str, wanted: Sequence[str]) -> bool:
     return False
 
 
-def _title_word(title: str, words: Sequence[str]) -> str | None:
+def title_word(title: str, words: Sequence[str]) -> str | None:
     """The first of `words` that is in the title as a whole word, so "lead" does
     not hit "Leadership" nor "vp" "VPN"."""
     lowered = title.lower()
@@ -275,11 +344,15 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     if hit:
         return Decision(SKIP, [f"posting mentions excluded keyword '{hit}'"])
 
-    word = _title_word(title, search.exclude_title_keywords)
+    word = title_word(title, search.exclude_title_keywords)
     if word:
         return Decision(SKIP, [f"title has the excluded word '{word}'"])
 
-    if search.require_title_keywords and not _title_word(title, search.require_title_keywords):
+    if (
+        search.require_title_keywords
+        and job.get("employment_type") != "internship"  # a source that says so is as good as the title
+        and not title_word(title, search.require_title_keywords)
+    ):
         return Decision(SKIP, [f"title '{title}' names none of the levels you asked for"])
 
     if not title_matches(title, search.titles):
@@ -297,21 +370,9 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
     if search.remote_only and not job.get("remote"):
         return Decision(SKIP, ["remote_only is set and this posting is not remote"])
 
-    if search.locations and not job.get("remote"):
-        location = _norm(job.get("location"))
-        # Boards commonly emit "N/A" or leave it blank. Unknown is not the same
-        # as wrong -- let the fit score decide those rather than dropping them.
-        if location and location not in UNKNOWN_LOCATIONS:
-            def matches(configured: str) -> bool:
-                c = _norm(configured)
-                if c in location:
-                    return True
-                return c == "united states" and _is_us_location(location)
-
-            if not any(matches(l) for l in search.locations):
-                return Decision(
-                    SKIP, [f"location '{job.get('location')}' is outside the configured list"]
-                )
+    place = location_skip(job.get("location"), bool(job.get("remote")), search)
+    if place:
+        return Decision(SKIP, [place])
 
     if _too_old(job.get("posted_at"), search.max_age_days):
         return Decision(SKIP, [f"posted {job.get('posted_at')}, older than {search.max_age_days} days"])

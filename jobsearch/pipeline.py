@@ -109,8 +109,17 @@ def write_bundle(
 
 
 def source_jobs(conn: sqlite3.Connection, config: Config, report: RunReport) -> None:
-    result = sourcing.collect(config)
+    # The internship lists name thousands of postings and cost an API call each for
+    # their text, so tell that source which ones are already stored.
+    known = {
+        "simplify": {
+            str(row["external_id"])
+            for row in conn.execute("SELECT external_id FROM jobs WHERE source = 'simplify'")
+        }
+    }
+    result = sourcing.collect(config, known=known)
     new, duplicates = sourcing.store(conn, result.postings)
+    closed, reopened = sourcing.sync_open(conn, result)
     conn.commit()
     report.sourced = new
     report.duplicates = duplicates
@@ -119,6 +128,8 @@ def source_jobs(conn: sqlite3.Connection, config: Config, report: RunReport) -> 
     for error in result.errors:
         report.fail(error)
     report.note(f"Sourced {new} new posting(s), {duplicates} already seen.")
+    if closed or reopened:
+        report.note(f"{closed} posting(s) closed since the last run, {reopened} open again.")
 
 
 def source_competitions(conn: sqlite3.Connection, report: RunReport) -> None:
@@ -143,8 +154,12 @@ def score_jobs(conn: sqlite3.Connection, g: graph.ProfileGraph, report: RunRepor
     pending = sourcing.list_jobs(conn, status="new", order="id ASC")
     updates = []
     for job in pending:
-        text = f"{job.get('title') or ''}\n{job.get('description') or ''}"
-        fit = matching.fit_score(text, docs)
+        description = job.get("description") or ""
+        text = f"{job.get('title') or ''}\n{description}"
+        # A lead whose text was out of reach (an internship list's Workday posting) would
+        # score 0 for want of anything to judge, and be screened out for it. Unscored is
+        # "not judged", which screen() lets through.
+        fit = None if sourcing.STUB_MARKER in description else matching.fit_score(text, docs)
         updates.append({"fit_score": fit, "status": "scored", "id": int(job["id"])})
         report.scored += 1
     # executemany() batches this into a handful of requests instead of one

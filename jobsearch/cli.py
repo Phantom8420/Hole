@@ -1238,6 +1238,8 @@ def cmd_config(args: argparse.Namespace) -> int:
     _out(f"  titles                {', '.join(config.search.titles) or '(any)'}")
     _out(f"  locations             {', '.join(config.search.locations) or '(any)'}"
          + ("   remote only" if config.search.remote_only else ""))
+    if config.search.exclude_locations:
+        _out(f"  never in              {', '.join(config.search.exclude_locations)}")
     if config.search.exclude_companies:
         _out(f"  exclude_companies     {', '.join(config.search.exclude_companies)}")
     if config.search.exclude_keywords:

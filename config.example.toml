@@ -53,6 +53,15 @@ keywords = ["python", "postgresql", "kubernetes", "api"]
 locations = ["Remote", "United States"]
 remote_only = false
 
+# False: a remote posting passes whatever place it names. True: one that names a place
+# ("Remote in Canada", "LATAM") has to be open to one on the list above too; "Remote"
+# and "Worldwide" name none and still pass.
+locations_apply_to_remote = false
+
+# Places never wanted, remote or not. Whole words ("India" leaves "Indianapolis"
+# alone), and unlike `locations` this also catches "Remote - India".
+exclude_locations = []
+
 # Never apply to these, whatever the score.
 exclude_companies = []
 
@@ -141,6 +150,20 @@ boards = [
 enabled = false
 # The slug in jobs.lever.co/<company>
 companies = ["netflix"]
+
+# A community-kept list of every open internship, read as the public JSON file it
+# publishes (github.com/SimplifyJobs/Summer2027-Internships). It is a directory: each
+# listing has the employer's own apply link, and the posting's text is fetched from its
+# Greenhouse, Lever or Ashby page when it has one, which also confirms it is still open.
+# Only listings that would survive the search filters above are kept, `limit` bounds how
+# many new ones are taken per run, and the rest are leads to open by hand.
+[sources.simplify]
+enabled = false
+terms = ["Summer 2027"]
+categories = ["Software", "AI/ML/Data"]
+degrees = ["Bachelor's"]
+exclude_sponsorship = ["U.S. Citizenship is Required", "Does Not Offer Sponsorship"]
+limit = 300
 
 [sources.ashby]
 enabled = true
