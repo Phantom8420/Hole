@@ -7,6 +7,12 @@
     { "source": "/:path*", "destination": "https://80-225-233-74.sslip.io/:path*" }
   ],
   "headers": [
-    { "source": "/(.*)", "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }] }
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
   ]
 }
