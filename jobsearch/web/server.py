@@ -635,6 +635,14 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
         server_version = "jobsearch"
         sys_version = ""
 
+        def end_headers(self) -> None:
+            # Everything here is for one signed-in person. A shared cache (Vercel's
+            # edge sits in front now) must never keep it, and a browser told
+            # nothing may cache heuristically -- so pages, redirects, errors and
+            # JSON all say so, from this one place.
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
         def _host_ok(self) -> bool:
             host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip().lower()
             if host in ALLOWED_HOSTS_SUFFIX or host == "":
@@ -699,7 +707,6 @@ def _handler_class(app: App) -> type[BaseHTTPRequestHandler]:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 

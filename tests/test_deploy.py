@@ -82,6 +82,23 @@ class HostAllowListTests(ServerCase):
                 self.assertEqual(response.status, expected)
 
 
+class CacheHeaderTests(ServerCase):
+    def test_every_kind_of_response_is_uncacheable_and_says_so_once(self) -> None:
+        form = {"Content-Type": "application/x-www-form-urlencoded"}
+        cases = (
+            ("a page", "GET", "/login", None, {}),
+            ("a redirect", "GET", "/", None, {}),
+            ("a refused host", "GET", "/login", None, {"Host": "front.example"}),
+            ("a failed login", "POST", "/login", b"password=wrong", form),
+            ("json", "POST", "/api/ingest", b"{}", {}),
+        )
+        for label, method, path, body, headers in cases:
+            with self.subTest(label):
+                response, _ = self.request(method, path, body=body, headers=headers)
+                values = [v for k, v in response.getheaders() if k.lower() == "cache-control"]
+                self.assertEqual(values, ["no-store"])
+
+
 class SessionCookieTests(ServerCase):
     def login(self, extra: dict | None = None):
         headers = {"Content-Type": "application/x-www-form-urlencoded", **(extra or {})}
