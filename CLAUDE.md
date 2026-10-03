@@ -36,6 +36,12 @@ python -m unittest discover -s tests -v
 python -m unittest tests.test_pipeline -v                          # one file
 python -m unittest tests.test_pipeline.PipelineTests.test_x -v     # one test
 
+# The tests never touch Turso: a path passed to db.connect()/--db always means that
+# SQLite file, and cli.main(argv) does not read .env (only a real invocation does).
+# Keep it that way -- a run that inherited TURSO_DATABASE_URL once wrote fixtures into
+# the production database. To be certain on a machine whose shell exports it, blank it:
+#   TURSO_DATABASE_URL= TURSO_AUTH_TOKEN= python -m unittest discover -s tests
+
 # Frontend (React, mounted by jobsearch/web/pages.py -- rebuild after any change
 # under frontend/src, the Python server reads the built bundle, not source)
 cd frontend && npm install && npm run build
