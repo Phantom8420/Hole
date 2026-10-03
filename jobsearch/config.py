@@ -79,6 +79,26 @@ class SearchConfig:
     max_age_days: int = 30
 
 
+DEFAULT_RUN_AT = "12:00"
+
+
+def _clock(value: Any, default: str = DEFAULT_RUN_AT) -> str:
+    """"H:MM" or "HH:MM" as a zero-padded "HH:MM", or the default when it is neither."""
+    text = str(value if value is not None else "").strip()
+    hour, sep, minute = text.partition(":")
+    if sep and hour.isdigit() and minute.isdigit() and int(hour) < 24 and int(minute) < 60 and len(minute) == 2:
+        return f"{int(hour):02d}:{minute}"
+    return default
+
+
+@dataclass
+class ScheduleConfig:
+    # When the unattended run starts each day, as HH:MM in GMT. What starts it is the
+    # timer on the server (deploy/oracle/jobsearch-run.timer); this is what the dashboard
+    # and the apps say, and tests/test_deploy.py pins the two to each other.
+    run_at: str = DEFAULT_RUN_AT
+
+
 @dataclass
 class SourceConfig:
     name: str
@@ -156,6 +176,7 @@ class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     dispatch: DispatchConfig = field(default_factory=DispatchConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     sources: dict[str, SourceConfig] = field(default_factory=dict)
     path: Path | None = None
 
@@ -254,6 +275,7 @@ class Config:
             limits=limits,
             dispatch=dispatch,
             llm=llm_config,
+            schedule=ScheduleConfig(run_at=_clock(_get(raw, "schedule.run_at"))),
             sources=sources,
             path=path,
         )

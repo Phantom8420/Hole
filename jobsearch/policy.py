@@ -156,9 +156,12 @@ class PolicyContext:
             if row["company"]:
                 per_company[_norm(row["company"])] = int(row["n"])
 
+        # A draft counts: the same role listed twice (a company's board and an internship
+        # list) must not be tailored, and then sent, a second time.
         applied: set[str] = set()
         for row in conn.execute(
-            "SELECT company, role FROM applications WHERE status IN ('approved','sent','responded')"
+            "SELECT company, role FROM applications "
+            "WHERE status IN ('drafted','approved','sent','responded')"
         ):
             applied.add(_pair(row["company"], row["role"]))
         return cls(
@@ -166,6 +169,10 @@ class PolicyContext:
             per_company_week=per_company,
             applied_fingerprints=applied,
         )
+
+    def record_application(self, company: str | None, role: str | None) -> None:
+        """Note that this run now has an application for the role."""
+        self.applied_fingerprints.add(_pair(company, role))
 
     def record_sent(self, company: str | None) -> None:
         self.sent_today += 1
@@ -389,15 +396,15 @@ def screen(job: dict[str, Any], config: Config, context: PolicyContext) -> Decis
         return Decision(SKIP, [f"the deadline, {str(job['deadline'])[:10]}, has passed"])
 
     if _pair(company, title) in context.applied_fingerprints:
-        return Decision(SKIP, ["already applied to this role"])
+        return Decision(SKIP, ["already have an application for this role"])
 
     fit = job.get("fit_score")
     if fit is not None and fit < search.min_fit:
         return Decision(SKIP, [f"fit {fit:.0f} below min_fit {search.min_fit:.0f}"])
 
-    if context.tailored_this_run >= config.limits.max_tailor_per_run:
-        return Decision(SKIP, [f"hit max_tailor_per_run ({config.limits.max_tailor_per_run})"])
-
+    # The per-run cap on tailoring is not checked here. A posting that passes is
+    # wanted whether or not this run has room for it, and run() leaves it scored for
+    # the next one. Skipping it here took it off the list for good.
     reasons = [f"fit {fit:.0f}" if fit is not None else "not scored yet"]
     return Decision(QUEUE, reasons)
 

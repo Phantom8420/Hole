@@ -56,15 +56,22 @@ class FakeResponse:
 
 
 @contextmanager
-def fake_gemini(response=None, *, raises: Exception | None = None):
-    """Install a stand-in `google.genai` for the duration of the block."""
-    captured: dict[str, object] = {}
+def fake_gemini(response=None, *, raises: Exception | None = None, sequence: list | None = None):
+    """Install a stand-in `google.genai` for the duration of the block. `sequence` is
+    what successive calls do: an exception to raise or a response to return."""
+    captured: dict[str, object] = {"calls": 0}
 
     class FakeModels:
         def generate_content(self, *, model, contents, config):
             captured["model"] = model
             captured["contents"] = contents
             captured["config"] = config
+            captured["calls"] = int(captured["calls"]) + 1
+            if sequence is not None:
+                item = sequence.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
             if raises is not None:
                 raise raises
             return response if response is not None else FakeResponse()
@@ -244,10 +251,44 @@ class GeminiCallTests(unittest.TestCase):
         self.assertIn("recitation", str(caught.exception).lower())
 
     def test_sdk_exception_is_wrapped(self) -> None:
-        with fake_gemini(raises=RuntimeError("429 quota exceeded")):
-            with self.assertRaises(llm.ModelError) as caught:
-                llm.call("S", "U")
-        self.assertIn("429 quota exceeded", str(caught.exception))
+        with fake_gemini(raises=ValueError("API key not valid")):
+            with mock.patch.object(llm.time, "sleep") as sleep:
+                with self.assertRaises(llm.ModelError) as caught:
+                    llm.call("S", "U")
+        self.assertIn("API key not valid", str(caught.exception))
+        self.assertFalse(caught.exception.transient)  # a bad key is not worth trying again
+        sleep.assert_not_called()
+
+    def test_a_rate_limit_is_waited_out_and_the_call_goes_through(self) -> None:
+        class RateLimited(Exception):
+            code = 429
+
+        with fake_gemini(sequence=[RateLimited("slow down"), RuntimeError("503 UNAVAILABLE"), FakeResponse("ok")]) as seen:
+            with mock.patch.object(llm.time, "sleep") as sleep:
+                text, _ = llm.call("S", "U")
+        self.assertEqual(text, "ok")
+        self.assertEqual(seen["calls"], 3)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [20, 60])
+
+    def test_a_quota_that_never_clears_ends_as_a_transient_error(self) -> None:
+        errors = [RuntimeError("429 RESOURCE_EXHAUSTED")] * 4
+        with fake_gemini(sequence=list(errors)) as seen:
+            with mock.patch.object(llm.time, "sleep") as sleep:
+                with self.assertRaises(llm.ModelError) as caught:
+                    llm.call("S", "U")
+        self.assertEqual(seen["calls"], 4)  # the first try and three more
+        self.assertEqual(sleep.call_count, 3)
+        self.assertTrue(caught.exception.transient)
+
+    def test_generate_passes_the_transient_flag_on(self) -> None:
+        with mock.patch.object(generate.llm, "call", side_effect=llm.ModelError("429", transient=True)):
+            with self.assertRaises(generate.GenerationError) as caught:
+                generate.call_model("S", "U")
+        self.assertTrue(caught.exception.transient)
+        with mock.patch.object(generate.llm, "call", side_effect=llm.ModelError("refused")):
+            with self.assertRaises(generate.GenerationError) as caught:
+                generate.call_model("S", "U")
+        self.assertFalse(caught.exception.transient)
 
     def test_missing_key_names_both_accepted_variables(self) -> None:
         with mock.patch.dict("os.environ", {}, clear=True):
