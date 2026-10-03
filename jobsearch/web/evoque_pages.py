@@ -203,7 +203,7 @@ _APPLIED_IN = "(" + ", ".join(f"'{s}'" for s in APPLIED_STATUSES) + ")"
 
 # Postings that got past the filters and that you have not applied to.
 _TO_APPLY = (
-    "status IN ('scored', 'tailored') AND fit_score IS NOT NULL AND id NOT IN ("
+    "status IN ('scored', 'tailored') AND id NOT IN ("
     f"SELECT job_id FROM applications WHERE job_id IS NOT NULL AND status IN {_APPLIED_IN})"
 )
 
@@ -212,7 +212,7 @@ def _to_apply(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]
     rows = db.rows_to_dicts(
         conn.execute(
             f"SELECT * FROM jobs WHERE {_TO_APPLY} "  # noqa: S608 -- constants only
-            "ORDER BY remote DESC, fit_score DESC, id DESC LIMIT ?",
+            "ORDER BY remote DESC, IFNULL(fit_score, -1) DESC, id DESC LIMIT ?",
             (limit,),
         ).fetchall()
     )

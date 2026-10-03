@@ -50,7 +50,15 @@ class SearchConfig:
     titles: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     locations: list[str] = field(default_factory=list)
+    # False: a remote posting passes whatever place it names. True: one that names a
+    # place ("Remote in Canada", "LATAM") has to name one in `locations` as well, while
+    # one that names none ("Remote", "Worldwide") still passes.
+    locations_apply_to_remote: bool = False
     remote_only: bool = False
+    # Places never wanted, remote or not. Whole words, so "India" leaves
+    # "Indianapolis" alone. `locations` above only judges on-site postings; this
+    # also catches "Remote - India".
+    exclude_locations: list[str] = field(default_factory=list)
     exclude_companies: list[str] = field(default_factory=list)
     exclude_keywords: list[str] = field(default_factory=list)
     # Whole words, checked against the title only. For seniority: "senior" in a
@@ -178,7 +186,9 @@ class Config:
             titles=_str_list(_get(raw, "search.titles")),
             keywords=_str_list(_get(raw, "search.keywords")),
             locations=_str_list(_get(raw, "search.locations")),
+            locations_apply_to_remote=bool(_get(raw, "search.locations_apply_to_remote", False)),
             remote_only=bool(_get(raw, "search.remote_only", False)),
+            exclude_locations=_str_list(_get(raw, "search.exclude_locations")),
             exclude_companies=[c.lower() for c in _str_list(_get(raw, "search.exclude_companies"))],
             exclude_keywords=[k.lower() for k in _str_list(_get(raw, "search.exclude_keywords"))],
             exclude_title_keywords=[

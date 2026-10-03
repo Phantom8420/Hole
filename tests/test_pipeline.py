@@ -420,6 +420,70 @@ class ScreenTests(unittest.TestCase):
         self.config.search.locations = ["United States"]
         self.assertEqual(self.screen(remote=0, location="Dublin, Ireland").action, policy.SKIP)
 
+    def test_places_match_as_whole_words(self) -> None:
+        self.config.search.locations = ["Berlin", "Dubai"]
+        for location in ("DE-Berlin-Trion Building", "Berlin, Germany", "Dubai - United Arab Emirates"):
+            with self.subTest(location):
+                self.assertEqual(self.screen(remote=0, location=location).action, policy.QUEUE)
+        self.config.search.locations = ["India"]
+        self.assertEqual(self.screen(remote=0, location="Indianapolis, IN").action, policy.SKIP)
+        self.assertEqual(self.screen(remote=0, location="Mumbai, India").action, policy.QUEUE)
+
+    def test_excluded_places_apply_to_remote_postings_too(self) -> None:
+        self.config.search.exclude_locations = ["India", "Bengaluru"]
+        for location in ("Remote - India", "Bengaluru", "India"):
+            with self.subTest(location):
+                decision = self.screen(remote=1, location=location)
+                self.assertEqual(decision.action, policy.SKIP)
+                self.assertIn("excluded list", decision.reasons[0])
+        for location in ("Remote", "Worldwide", "Indianapolis, IN", "Berlin"):
+            with self.subTest(location):
+                self.assertEqual(self.screen(remote=1, location=location).action, policy.QUEUE)
+        self.assertEqual(Config.from_dict({}).search.exclude_locations, [])
+
+    def test_remote_postings_ignore_the_locations_unless_told_otherwise(self) -> None:
+        self.config.search.locations = ["United States", "Dubai"]
+        self.assertEqual(self.screen(remote=1, location="Remote in Canada").action, policy.QUEUE)
+
+    def test_remote_postings_can_be_held_to_the_locations_too(self) -> None:
+        self.config.search.locations = ["Remote", "United States", "Europe", "Dubai"]
+        self.config.search.locations_apply_to_remote = True
+        for location in (
+            "Remote", "Worldwide", "Anywhere", "Remote in USA", "Remote - US", "Remote (Europe)",
+            "Americas, Europe, Israel", "Remote - Dubai", "Austin, TX", "",
+        ):
+            with self.subTest(location):
+                self.assertEqual(self.screen(remote=1, location=location).action, policy.QUEUE)
+        for location in ("Remote in Canada", "LATAM", "Remote - Brazil", "APAC"):
+            with self.subTest(location):
+                decision = self.screen(remote=1, location=location)
+                self.assertEqual(decision.action, policy.SKIP)
+                self.assertIn("only from", decision.reasons[0])
+        # with only "Remote" listed there is no place to hold anyone to
+        self.config.search.locations = ["Remote"]
+        self.assertEqual(self.screen(remote=1, location="Remote in Canada").action, policy.QUEUE)
+        self.assertFalse(Config.from_dict({}).search.locations_apply_to_remote)
+
+    def test_a_country_code_in_front_is_not_a_state(self) -> None:
+        for location, us in {
+            "us-wa-bellevue": True,
+            "us-remote": True,
+            "de-berlin-trion building": False,  # Germany, not Delaware
+            "in-pune": False,  # India, not Indiana
+            "ca-toronto": False,  # Canada, not California
+            "gb-london": False,
+        }.items():
+            with self.subTest(location):
+                self.assertEqual(policy._is_us_location(location), us)
+
+    def test_us_places_that_name_no_state(self) -> None:
+        for location in ("nyc", "hybrid - san francisco", "remote - us", "remote (us)", "austin, tx", "sf"):
+            with self.subTest(location):
+                self.assertTrue(policy._is_us_location(location))
+        for location in ("london", "dublin, ireland", "dubai", "berlin", "remote - emea"):
+            with self.subTest(location):
+                self.assertFalse(policy._is_us_location(location))
+
     def test_stale_posting(self) -> None:
         self.config.search.max_age_days = 30
         self.assertEqual(self.screen(posted_at="2020-01-01").action, policy.SKIP)

@@ -71,6 +71,10 @@ ARBEITNOW = {
         [{"slug": f"local{i}", "company_name": "X", "title": "Onsite", "remote": False,
           "url": "https://www.arbeitnow.com/jobs/local", "location": "Berlin",
           "description": "<p>x</p>", "created_at": "1786698032"} for i in range(30)]
+        + [{"slug": "student1", "company_name": "Ommax", "title": "Intern AI & Data Engineering (m/f/d)",
+            "remote": False, "url": "https://www.arbeitnow.com/jobs/student1", "location": "Munich",
+            "job_types": ["Student", "Intern", "Full time"], "description": "<p>z</p>",
+            "created_at": "1786698032"}]
         + [{"slug": "remote1", "company_name": "Lassie", "title": "Growth Manager",
             "remote": True, "url": "https://www.arbeitnow.com/jobs/remote1",
             "location": "Remote", "description": "<p>y</p>", "created_at": "1786698032"}]
@@ -133,6 +137,17 @@ class ArbeitnowTests(unittest.TestCase):
         with _patch(ARBEITNOW):
             result = rb.fetch_arbeitnow(limit=5, remote_only=False)
         self.assertEqual(len(result.postings), 5)
+
+    def test_student_postings_are_typed_from_the_boards_own_tags(self) -> None:
+        with _patch(ARBEITNOW):
+            result = rb.fetch_arbeitnow(limit=100, remote_only=False)
+        types = {p.external_id: p.employment_type for p in result.postings}
+        self.assertEqual(types["student1"], "internship")
+        self.assertIsNone(types["local0"])
+        self.assertIsNone(types["remote1"])
+        self.assertEqual(rb._arbeitnow_type(["Entry", "Working student", "Part time"]), "internship")
+        self.assertIsNone(rb._arbeitnow_type(["Experienced", "Permanent", "Full time"]))
+        self.assertIsNone(rb._arbeitnow_type(None))
 
 
 class FailureTests(unittest.TestCase):

@@ -369,6 +369,15 @@ class DashboardListTests(WebTestCase):
         self.assertNotIn("Skipped Wizard", body)
         self.assertNotIn("Unscored Wizard", body)
 
+    def test_a_lead_with_no_fit_still_counts_and_a_closed_posting_does_not(self) -> None:
+        # a lead whose text was out of reach is unscored, not a poor fit
+        self.add_job("Workday Lead Intern", fit_score=None)
+        self.add_job("Gone Intern", status="closed", fit_score=50.0)
+        body = self.dashboard()
+        self.assertIn("Workday Lead Intern", body)
+        self.assertIn("2 past your filters", body)
+        self.assertNotIn("Gone Intern", body)
+
     def test_applied_lists_what_you_said_yes_to_and_takes_it_off_to_apply(self) -> None:
         body = self.dashboard()
         self.assertIn("Nothing applied to yet", body)

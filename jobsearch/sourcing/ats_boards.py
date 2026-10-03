@@ -64,6 +64,7 @@ def fetch_greenhouse(tokens: list[str]) -> SourceResult:
                     posted_at=iso_date(job.get("updated_at") or job.get("first_published")),
                 )
             )
+    result.complete = not result.errors
     return result
 
 
@@ -109,6 +110,7 @@ def fetch_lever(companies: list[str]) -> SourceResult:
                     posted_at=iso_date(job.get("createdAt")),
                 )
             )
+    result.complete = not result.errors
     return result
 
 
@@ -149,4 +151,5 @@ def fetch_ashby(boards: list[str]) -> SourceResult:
                     posted_at=iso_date(job.get("publishedAt")),
                 )
             )
+    result.complete = not result.errors
     return result

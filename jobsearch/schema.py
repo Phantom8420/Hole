@@ -387,10 +387,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     description TEXT,
     compensation TEXT,
     posted_at TEXT,
+    employment_type TEXT,                 -- internship / full_time / part_time / contract / freelance, where the source says
     discovered_at TEXT NOT NULL,
     fingerprint TEXT NOT NULL UNIQUE,
     fit_score REAL,
-    status TEXT NOT NULL DEFAULT 'new',   -- new / scored / skipped / tailored / applied / failed
+    status TEXT NOT NULL DEFAULT 'new',   -- new / scored / skipped / tailored / applied / failed / closed
     skip_reason TEXT
 );
 
@@ -437,7 +438,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_app ON messages(application_id);
 """
 
 APPLICATION_STATUSES = ("drafted", "approved", "sent", "responded", "rejected")
-JOB_STATUSES = ("new", "scored", "skipped", "tailored", "applied", "failed")
+JOB_STATUSES = ("new", "scored", "skipped", "tailored", "applied", "failed", "closed")
 MESSAGE_CHANNELS = ("email", "linkedin_dm", "linkedin_note")
 DISPATCH_CHANNELS = ("email", "ats_form", "manual")
 PROFICIENCY_LEVELS = ("familiar", "working", "advanced", "expert")

@@ -116,6 +116,14 @@ def fetch_remoteok(*, limit: int = 100) -> SourceResult:
     return result
 
 
+def _arbeitnow_type(job_types: Any) -> str | None:
+    """Arbeitnow tags each posting ("Student", "Intern", "Working student", ...)."""
+    kinds = {str(t).strip().lower() for t in job_types or []}
+    if kinds & {"intern", "internship", "student", "working student", "student college"}:
+        return "internship"
+    return None
+
+
 def fetch_arbeitnow(*, limit: int = 100, remote_only: bool = True) -> SourceResult:
     result = SourceResult(source="arbeitnow")
     try:
@@ -142,6 +150,7 @@ def fetch_arbeitnow(*, limit: int = 100, remote_only: bool = True) -> SourceResu
                 url=_text(row.get("url")),
                 description=html_to_text(row.get("description")),
                 posted_at=iso_date(row.get("created_at")),
+                employment_type=_arbeitnow_type(row.get("job_types")),
             )
         )
         if len(result.postings) >= limit:
