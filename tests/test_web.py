@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -207,6 +208,15 @@ class CsrfTests(WebTestCase):
         conn.close()
         self.assertEqual(app["status"], "drafted")
 
+    def test_the_applied_actions_need_the_token_too(self) -> None:
+        for path in (f"/applications/{self.app_id}/sent", f"/jobs/{self.job_id}/applied"):
+            with self.subTest(path=path):
+                status, _body = self.app.post(path, {"token": "not-the-token"})
+                self.assertEqual(status, 403)
+        conn = db.connect(self.db_path)
+        self.assertEqual(db.get_application(conn, self.app_id)["status"], "drafted")
+        conn.close()
+
     def test_forms_carry_the_token(self) -> None:
         # The page is server-rendered, so the approve/reject forms carry the
         # token the way a form actually should: a hidden input on the form
@@ -309,6 +319,144 @@ class ContentTests(WebTestCase):
         with mock.patch.object(Config, "exists", lambda self: True):
             _status, body = self.app.get("/", {})
         self.assertIn("Review-only mode", body)
+
+
+class DashboardListTests(WebTestCase):
+    """The dashboard's three working lists: what to apply to, what you have
+    applied to, and the competitions still open."""
+
+    def add_job(self, title: str, **fields: object) -> int:
+        conn = db.connect(self.db_path)
+        job_id = db.insert_row(conn, "jobs", {
+            "source": "greenhouse", "company": "Globex", "title": title, "location": "Remote",
+            "remote": 1, "url": f"https://example.com/{len(title)}", "description": "x",
+            "discovered_at": db.now(), "fingerprint": f"fp-{title}", "fit_score": 30.0,
+            "status": "scored", **fields,
+        })
+        conn.commit()
+        conn.close()
+        return job_id
+
+    def add_competition(self, name: str, deadline: str | None, status: str = "discovered") -> None:
+        conn = db.connect(self.db_path)
+        db.insert_row(conn, "competitions", {
+            "name": name, "category": "hackathon", "deadline": deadline, "status": status,
+            "url": f"https://example.com/{len(name)}",
+        })
+        conn.commit()
+        conn.close()
+
+    def dashboard(self) -> str:
+        status, body = self.app.get("/", {})
+        self.assertEqual(status, 200)
+        return body
+
+    def row(self, table: str, row_id: int) -> dict:
+        conn = db.connect(self.db_path)
+        try:
+            return db.get_row(conn, table, row_id)
+        finally:
+            conn.close()
+
+    def test_to_apply_holds_postings_past_the_filters_and_nothing_else(self) -> None:
+        self.add_job("Detection Engineer", remote=0, fit_score=33.0)
+        self.add_job("Skipped Wizard", status="skipped", fit_score=90.0)
+        self.add_job("Unscored Wizard", status="new", fit_score=None)
+        body = self.dashboard()
+        self.assertIn("Detection Engineer", body)
+        self.assertIn("Backend Engineer", body)  # the fixture's scored posting
+        self.assertIn("2 past your filters", body)
+        self.assertNotIn("Skipped Wizard", body)
+        self.assertNotIn("Unscored Wizard", body)
+
+    def test_applied_lists_what_you_said_yes_to_and_takes_it_off_to_apply(self) -> None:
+        body = self.dashboard()
+        self.assertIn("Nothing applied to yet", body)
+        self.assertIn("1 past your filters", body)
+        self.app.post(f"/applications/{self.app_id}/approve", {"token": TOKEN})
+        body = self.dashboard()
+        self.assertIn("1 approved or sent", body)
+        self.assertIn("0 past your filters", body)
+
+    def test_upcoming_competitions_are_the_open_ones_soonest_first(self) -> None:
+        today = date.today()
+        self.add_competition("Later Hack", (today + timedelta(days=40)).isoformat())
+        self.add_competition("Soon Hack", (today + timedelta(days=3)).isoformat())
+        self.add_competition("Undated Hack", None)
+        self.add_competition("Closed Hack", (today - timedelta(days=5)).isoformat())
+        self.add_competition("Dismissed Hack", (today + timedelta(days=2)).isoformat(), "dismissed")
+        body = self.dashboard()
+        self.assertIn("3 still open", body)
+        self.assertLess(body.index("Soon Hack"), body.index("Later Hack"))
+        self.assertLess(body.index("Later Hack"), body.index("Undated Hack"))
+        self.assertNotIn("Closed Hack", body)
+        self.assertNotIn("Dismissed Hack", body)
+
+    def test_hostile_titles_and_names_are_escaped(self) -> None:
+        self.add_job(XSS)
+        self.add_competition(XSS + " cup", (date.today() + timedelta(days=5)).isoformat())
+        body = self.dashboard()
+        self.assertNotIn(XSS, body)
+        self.assertIn("&lt;script&gt;alert(", body)
+
+    def test_i_applied_marks_the_draft_sent_and_the_job_applied(self) -> None:
+        status, location = self.app.post(f"/jobs/{self.job_id}/applied", {"token": TOKEN})
+        self.assertEqual((status, location), (303, f"/jobs/{self.job_id}"))
+        app = self.row("applications", self.app_id)
+        self.assertEqual(
+            (app["status"], app["sent_date"], app["channel"]),
+            ("sent", date.today().isoformat(), "manual"),
+        )
+        self.assertEqual(self.row("jobs", self.job_id)["status"], "applied")
+        conn = db.connect(self.db_path)
+        count = conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 1)  # the draft was the application, so none was added
+
+    def test_i_applied_without_a_draft_records_one_manual_application(self) -> None:
+        job_id = self.add_job("Detection Engineer")
+        for _ in range(2):
+            self.app.post(f"/jobs/{job_id}/applied", {"token": TOKEN})
+        conn = db.connect(self.db_path)
+        rows = db.rows_to_dicts(
+            conn.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,)).fetchall()
+        )
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            (rows[0]["status"], rows[0]["channel"], rows[0]["role"], rows[0]["company"]),
+            ("sent", "manual", "Detection Engineer", "Globex"),
+        )
+        self.assertEqual(self.row("jobs", job_id)["status"], "applied")
+        self.assertIn("1 approved or sent", self.dashboard())
+
+    def test_mark_as_sent_keeps_the_first_date_and_never_undoes_a_response(self) -> None:
+        self.app.post(f"/applications/{self.app_id}/sent", {"token": TOKEN})
+        conn = db.connect(self.db_path)
+        db.update_application(conn, self.app_id, {"sent_date": "2026-01-02"})
+        conn.commit()
+        conn.close()
+        self.app.post(f"/applications/{self.app_id}/sent", {"token": TOKEN})
+        app = self.row("applications", self.app_id)
+        self.assertEqual((app["status"], app["sent_date"]), ("sent", "2026-01-02"))
+
+        conn = db.connect(self.db_path)
+        db.update_application(conn, self.app_id, {"status": "responded"})
+        conn.commit()
+        conn.close()
+        self.app.post(f"/applications/{self.app_id}/sent", {"token": TOKEN})
+        self.assertEqual(self.row("applications", self.app_id)["status"], "responded")
+
+    def test_the_buttons_are_only_offered_while_they_make_sense(self) -> None:
+        _s, job_page = self.app.get(f"/jobs/{self.job_id}", {})
+        _s, app_page = self.app.get(f"/applications/{self.app_id}", {})
+        self.assertIn("I applied to this role", job_page)
+        self.assertIn("Mark as sent", app_page)
+        self.app.post(f"/jobs/{self.job_id}/applied", {"token": TOKEN})
+        _s, job_page = self.app.get(f"/jobs/{self.job_id}", {})
+        _s, app_page = self.app.get(f"/applications/{self.app_id}", {})
+        self.assertNotIn("I applied to this role", job_page)
+        self.assertNotIn("Mark as sent", app_page)
 
 
 class BindingTests(unittest.TestCase):

@@ -210,6 +210,7 @@ _EXTRA_CSS = """
    filters plus the search button run past one screenful on shorter windows.
    It needs its own scrollbar, same as `.main-scroll` gets one below. */
 .sidebar{overflow-y:auto}
+.flights.stack{flex:none}
 .sidebar::-webkit-scrollbar{width:6px}
 .sidebar::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:9px}
 @media(max-width:1040px){.app{height:auto;grid-template-rows:none}}
@@ -270,6 +271,12 @@ _EXTRA_CSS = """
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow .ti{flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow .lo{font-size:11.5px;color:var(--muted-2);white-space:nowrap}
+/* The sidebar is too narrow for the table-style row: the title takes the width
+   and the company, place or deadline sits under it. */
+.trow.two .ti{display:flex;flex-direction:column;gap:4px;min-width:0}
+.trow.two .ti b{font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.trow.two .ti small{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tag{font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:7px;
   background:var(--accent-soft);color:var(--accent-2);white-space:nowrap}
 .tag.mute{background:var(--panel);color:var(--muted-2)}
@@ -449,10 +456,12 @@ def search_card(*, action: str, q: str = "", where: str = "", extra: str = "") -
     )
 
 
-def list_panel(*, title: str, sub: str, rows: str, tools: str = "") -> str:
+def list_panel(*, title: str, sub: str, rows: str, tools: str = "", stacked: bool = False) -> str:
+    """`stacked` is for a sidebar with several lists in it: each keeps the height
+    of its own rows rather than sharing what the first one would have filled."""
     body = rows or '<div class="empty">Nothing here yet.</div>'
     return (
-        '<div class="flights"><div class="flights-head"><div>'
+        f'<div class="flights{" stack" if stacked else ""}"><div class="flights-head"><div>'
         f'<h2>{esc(title)}</h2><div class="sub">{esc(sub)}</div></div>{tools}</div>'
         f'<div class="flight-list">{body}</div></div>'
     )
