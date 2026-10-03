@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -276,6 +277,36 @@ class StoreTests(TempDbCase):
             self.assertEqual((new, dupes), (1, 0))
             new, dupes = store(conn, postings)
             self.assertEqual((new, dupes), (0, 1))
+
+    def test_store_never_provokes_an_integrity_error(self) -> None:
+        class Remote:
+            """sqlite, but a constraint failure comes out the way Turso's does (a
+            KeyError from its client library, never sqlite3.IntegrityError). With
+            `blind`, the fingerprint lookup also finds nothing, as it would for a
+            posting another writer stored a moment ago."""
+
+            def __init__(self, conn: sqlite3.Connection, blind: bool = False) -> None:
+                self.conn, self.blind = conn, blind
+
+            def execute(self, sql, params=()):
+                if self.blind and sql.startswith("SELECT fingerprint"):
+                    return iter(())
+                try:
+                    return self.conn.execute(sql, params)
+                except sqlite3.IntegrityError as exc:
+                    raise KeyError("result") from exc
+
+        postings = [
+            base.Posting("greenhouse", "1", "Acme", "Backend Engineer"),
+            base.Posting("lever", "2", "Beta", "Data Engineer"),
+        ]
+        fresh = base.Posting("ashby", "3", "Gamma", "ML Engineer")
+        with db.session(self.db_path) as conn:
+            self.assertEqual(store(Remote(conn), postings), (2, 0))
+            self.assertEqual(store(Remote(conn), postings + postings), (0, 4))
+            self.assertEqual(store(Remote(conn, blind=True), postings), (0, 2))
+            self.assertEqual(store(Remote(conn), [fresh, fresh]), (1, 1))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 3)
 
 
 # --------------------------------------------------------------------------- policy
