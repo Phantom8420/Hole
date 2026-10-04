@@ -23,6 +23,11 @@ For development, those three can live in `desktop/.env.local` (gitignored), one
 - Each service gets a `WebContentsView` with its own persistent session
   (`persist:svc-<id>`). You sign in once, by hand, inside the app; nothing here handles
   your passwords.
+- You stay signed in between launches. A site that signs you in with a cookie that has no
+  expiry (a session cookie) would normally sign you out when the app closes, so
+  `src/cookies.js` stores such a cookie again, with a 30-day expiry, a few seconds after it
+  appears and once more as the app closes. The site's own session timeout still applies: this
+  keeps the cookie, not the sign-in, so when the site has ended the session you sign in again.
 - `src/driver.js` is the control surface: `goto`, `waitFor`, `evaluate`, `click`, `type`,
   `press`, `screenshot`. Reads run in an isolated world the site's scripts cannot see;
   clicks and keys are real input events.

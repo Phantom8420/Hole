@@ -206,3 +206,13 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
+
+// A sign-in made just before closing is still waiting for its expiry (src/cookies.js): store it
+// first, but never let that hold the app open for more than a moment.
+let leaving = false;
+app.on('before-quit', (event) => {
+  if (leaving || !stage) return;
+  leaving = true;
+  event.preventDefault();
+  Promise.race([stage.keepSessions(), new Promise((resolve) => setTimeout(resolve, 3000))]).finally(() => app.quit());
+});
