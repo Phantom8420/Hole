@@ -1295,7 +1295,22 @@ def cmd_config(args: argparse.Namespace) -> int:
     if not problems:
         _out("")
         _out("Config looks usable.")
-    return 1 if problems else 0
+    check_failed = False
+    if getattr(args, "check_model", False):
+        _out("")
+        check_failed = not _check_model()
+    return 1 if problems or check_failed else 0
+
+
+def _check_model() -> bool:
+    """One tiny call, to see that the model's key works; says why when it does not."""
+    try:
+        _text, usage = llm.call("Reply with the single word OK.", "ping", max_tokens=64)
+    except llm.ModelError as exc:
+        _out(f"Model check FAILED: {str(exc).splitlines()[0][:300]}")
+        return False
+    _out(f"Model check: {usage.get('provider')} answered ({usage.get('model')}).")
+    return True
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -1371,6 +1386,19 @@ def cmd_jobs(args: argparse.Namespace) -> int:
         if args.jobs_action == "purge":
             cur = conn.execute("DELETE FROM jobs WHERE status IN ('skipped','failed')")
             _out(f"Removed {cur.rowcount} skipped/failed posting(s).")
+            return 0
+
+        if args.jobs_action == "retry":
+            # A posting is marked failed when the model would not write it, and that is not always
+            # the posting's doing: a model key that was refused once wrote off hundreds in one run.
+            # This puts them back, with the score they had, to be tailored on the next run.
+            sql = "UPDATE jobs SET status = 'scored', skip_reason = NULL WHERE status = 'failed'"
+            params: tuple[str, ...] = ()
+            if args.reason:
+                sql += " AND skip_reason LIKE ?"
+                params = (f"%{args.reason}%",)
+            cur = conn.execute(sql, params)
+            _out(f"Put {cur.rowcount} failed posting(s) back, to be tailored on the next run.")
             return 0
 
         if args.jobs_action == "rescore":
@@ -1758,6 +1786,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("config", parents=[common, config_opt],
                        help="show the effective pipeline settings and any problems")
+    p.add_argument("--check-model", action="store_true",
+                   help="also make one tiny call to the model, to see that its key works")
     p.set_defaults(func=cmd_config)
 
     p = sub.add_parser("competitions", parents=[common],
@@ -1803,6 +1833,9 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("id", type=int)
     q.add_argument("--full", action="store_true", help="include the full posting text")
     jsub.add_parser("purge", parents=[common], help="delete skipped and failed postings")
+    q = jsub.add_parser("retry", parents=[common],
+                        help="put failed postings back to be tailored again on the next run")
+    q.add_argument("--reason", help="only those whose failure message contains this text")
     jsub.add_parser("rescore", parents=[common],
                     help="re-evaluate stored postings after changing config or scoring")
     p.add_argument("--status", choices=list(schema.JOB_STATUSES))

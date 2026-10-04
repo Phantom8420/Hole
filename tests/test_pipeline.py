@@ -881,6 +881,60 @@ class PipelineTests(TempDbCase):
         self.assertEqual(len(report.errors), 1)
         self.assertTrue(any("next run" in line for line in report.log))
 
+    def test_a_key_the_provider_refuses_stops_the_asking_and_writes_nothing_off(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting()])
+        calls = []
+
+        def refused(*args: object, **kwargs: object):
+            calls.append(1)
+            raise generate.GenerationError("Gemini call failed: ClientError: 401 UNAUTHENTICATED", setup=True)
+
+        with mock.patch.object(pipeline.generate, "generate", refused):
+            with db.session(self.db_path) as conn:
+                report = pipeline.run(conn, make_config(), skip_sourcing=True)
+        self.assertEqual(len(calls), 1)  # it did not try the second posting with the same key
+        self.assertEqual(self.statuses(), ["scored", "scored"])  # and neither is marked failed
+        self.assertEqual(len(report.errors), 1)
+        self.assertTrue(any("next run" in line for line in report.log))
+
+    def test_postings_failing_one_after_another_stop_the_run_before_they_are_all_written_off(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting(company=f"Co{i}", external_id=str(100 + i)) for i in range(8)])
+        calls = []
+
+        def never(*args: object, **kwargs: object):
+            calls.append(1)
+            raise generate.GenerationError("Gemini refused the prompt")
+
+        config = make_config(limits={"max_tailor_per_run": 50})
+        with mock.patch.object(pipeline.generate, "generate", never):
+            with db.session(self.db_path) as conn:
+                report = pipeline.run(conn, config, skip_sourcing=True)
+        stop = pipeline.MAX_FAILED_IN_A_ROW
+        self.assertEqual(len(calls), stop)
+        self.assertEqual(self.statuses(), ["failed"] * stop + ["scored"] * (9 - stop))  # the setUp posting and eight more
+        self.assertTrue(any("in a row" in line for line in report.log))
+
+    def test_a_posting_that_works_starts_the_count_again(self) -> None:
+        with db.session(self.db_path) as conn:
+            store(conn, [self.other_posting(company=f"Co{i}", external_id=str(100 + i)) for i in range(8)])
+        stop = pipeline.MAX_FAILED_IN_A_ROW
+        outcomes = iter([generate.GenerationError("refused")] * (stop - 1) + [None] + [generate.GenerationError("refused")] * (stop - 1))
+
+        def one_in_between(description: str, plan: object, **kwargs: object):
+            outcome = next(outcomes)
+            if outcome:
+                raise outcome
+            return stub_generate(CANNED)(description, plan, **kwargs)
+
+        config = make_config(limits={"max_tailor_per_run": 50})
+        with mock.patch.object(pipeline.generate, "generate", one_in_between):
+            with db.session(self.db_path) as conn:
+                report = pipeline.run(conn, config, skip_sourcing=True)
+        self.assertEqual(self.statuses(), ["failed"] * (2 * (stop - 1)) + ["tailored"])  # every posting was tried
+        self.assertFalse(any("in a row" in line for line in report.log))
+
     def test_any_other_model_failure_still_fails_that_posting_only(self) -> None:
         with db.session(self.db_path) as conn:
             store(conn, [self.other_posting()])
@@ -944,7 +998,7 @@ class PipelineTests(TempDbCase):
 
     def test_generation_failure_marks_the_job_not_the_run(self) -> None:
         def explode(*args: object, **kwargs: object):
-            raise generate.GenerationError("no API key")
+            raise generate.GenerationError("Gemini refused the prompt")
 
         with mock.patch.object(pipeline.generate, "generate", explode):
             with db.session(self.db_path) as conn:
@@ -982,6 +1036,27 @@ class PipelineCliTests(TempDbCase):
         code, output = self.run_cli("jobs")
         self.assertEqual(code, 0)
         self.assertIn("No postings stored", output)
+
+    def test_jobs_retry_puts_failed_postings_back_to_be_tailored(self) -> None:
+        refused = "Gemini call failed: ClientError: 401 UNAUTHENTICATED"
+        with db.session(self.db_path) as conn:
+            store(conn, [base.Posting("greenhouse", str(n), "Acme", f"Backend Engineer {n}") for n in (1, 2, 3)])
+            db.update_row(conn, "jobs", 1, {"status": "failed", "skip_reason": refused, "fit_score": 61.0})
+            db.update_row(conn, "jobs", 2, {"status": "failed", "skip_reason": "Gemini refused the prompt"})
+            db.update_row(conn, "jobs", 3, {"status": "skipped", "skip_reason": "old rule"})
+        code, output = self.run_cli("jobs", "retry", "--reason", "401 UNAUTHENTICATED")
+        self.assertEqual(code, 0)
+        self.assertIn("Put 1 failed", output)
+        with db.session(self.db_path) as conn:
+            first = db.get_row(conn, "jobs", 1)
+            self.assertEqual((first["status"], first["skip_reason"], first["fit_score"]), ("scored", None, 61.0))
+            self.assertEqual(db.get_row(conn, "jobs", 2)["status"], "failed")  # a different reason
+            self.assertEqual(db.get_row(conn, "jobs", 3)["status"], "skipped")  # not failed at all
+        _code, output = self.run_cli("jobs", "retry")  # no reason: every failed posting
+        self.assertIn("Put 1 failed", output)
+        with db.session(self.db_path) as conn:
+            self.assertEqual(db.get_row(conn, "jobs", 2)["status"], "scored")
+            self.assertEqual(db.get_row(conn, "jobs", 3)["status"], "skipped")
 
     def test_jobs_rescore_resets_stale_verdicts(self) -> None:
         with db.session(self.db_path) as conn:

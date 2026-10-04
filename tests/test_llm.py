@@ -8,10 +8,11 @@ and empty text that reaches the caller looks exactly like a successful run.
 
 from __future__ import annotations
 
+import io
 import sys
 import types as pytypes
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -19,7 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jobsearch import config as config_module  # noqa: E402
-from jobsearch import generate, llm  # noqa: E402
+from jobsearch import cli, generate, llm  # noqa: E402
 
 
 class FakeResponse:
@@ -258,6 +259,65 @@ class GeminiCallTests(unittest.TestCase):
         self.assertIn("API key not valid", str(caught.exception))
         self.assertFalse(caught.exception.transient)  # a bad key is not worth trying again
         sleep.assert_not_called()
+
+    def test_a_key_the_provider_turns_down_is_a_setup_error_and_is_not_retried(self) -> None:
+        class Unauthenticated(Exception):
+            code = 401
+
+        class Forbidden(Exception):
+            status_code = 403
+
+        for error in (Unauthenticated("Request had invalid authentication credentials"), Forbidden("no"),
+                      RuntimeError("403 PERMISSION_DENIED"), ValueError("API key not valid")):
+            with self.subTest(error=str(error)):
+                with fake_gemini(sequence=[error, FakeResponse("never reached")]) as seen:
+                    with mock.patch.object(llm.time, "sleep") as sleep:
+                        with self.assertRaises(llm.ModelError) as caught:
+                            llm.call("S", "U")
+                self.assertTrue(caught.exception.setup)
+                self.assertFalse(caught.exception.transient)
+                self.assertEqual(seen["calls"], 1)
+                sleep.assert_not_called()
+
+    def test_failures_that_are_about_the_request_are_not_setup_errors(self) -> None:
+        with fake_gemini(raises=ValueError("something else went wrong")):
+            with self.assertRaises(llm.ModelError) as caught:
+                llm.call("S", "U")
+        self.assertFalse(caught.exception.setup)
+        with fake_gemini(FakeResponse("", finish="SAFETY")):
+            with self.assertRaises(llm.ModelError) as caught:
+                llm.call("S", "U")
+        self.assertFalse(caught.exception.setup)
+
+    def test_no_key_and_an_unknown_provider_are_setup_errors(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(llm.ModelError) as caught:
+                llm.call("S", "U", provider="gemini")
+        self.assertTrue(caught.exception.setup)
+        with self.assertRaises(llm.ModelError) as caught:
+            llm.call("S", "U", provider="nonesuch")
+        self.assertTrue(caught.exception.setup)
+
+    def test_generate_passes_the_setup_flag_on(self) -> None:
+        with mock.patch.object(generate.llm, "call", side_effect=llm.ModelError("401", setup=True)):
+            with self.assertRaises(generate.GenerationError) as caught:
+                generate.call_model("S", "U")
+        self.assertTrue(caught.exception.setup)
+        with mock.patch.object(generate.llm, "call", side_effect=llm.ModelError("refused")):
+            with self.assertRaises(generate.GenerationError) as caught:
+                generate.call_model("S", "U")
+        self.assertFalse(caught.exception.setup)
+
+    def test_the_model_check_says_whether_the_key_works(self) -> None:
+        for fake, works, wanted in (
+            (lambda: fake_gemini(FakeResponse("OK")), True, "answered"),
+            (lambda: fake_gemini(raises=ValueError("API key not valid")), False, "FAILED"),
+        ):
+            with self.subTest(wanted=wanted):
+                out = io.StringIO()
+                with fake(), redirect_stdout(out):
+                    self.assertEqual(cli._check_model(), works)
+                self.assertIn(wanted, out.getvalue())
 
     def test_a_rate_limit_is_waited_out_and_the_call_goes_through(self) -> None:
         class RateLimited(Exception):
