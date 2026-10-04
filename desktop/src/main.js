@@ -12,7 +12,7 @@ const { dedupe, extract } = require('./extractors');
 const { sendItems, tokenStore } = require('./ingest');
 const { describe, fetchStatus, startRun } = require('./pipeline');
 const { Limiter } = require('./limits');
-const { resolveServices, webUrl } = require('./services');
+const { resolveServices, sectionsOf, webUrl } = require('./services');
 const { Stage } = require('./stage');
 
 const SELF_TEST = process.argv.includes('--self-test');
@@ -63,6 +63,7 @@ function appState() {
     hasToken: tokens.present(),
     perDay: limiter.perDay,
     services: list.map((s) => ({ ...s, used: limiter.used(s.id) })),
+    sections: sectionsOf(list),
   };
 }
 

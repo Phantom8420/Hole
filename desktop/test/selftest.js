@@ -19,7 +19,7 @@ const { Driver } = require('../src/driver');
 const { EXTRACTORS, extract } = require('../src/extractors');
 const { sendItems } = require('../src/ingest');
 const { Limiter, LimitError } = require('../src/limits');
-const { resolveServices } = require('../src/services');
+const { resolveServices, sectionsOf } = require('../src/services');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 
@@ -52,13 +52,22 @@ function startServer() {
 }
 
 // Load the real shell page with the real preload, answering the few channels it asks about at
-// start-up, and describe what the rail drew. What this shows that icons.test.js cannot: each
-// path parses (an invalid one measures 0 x 0) and is painted in the button's own colour.
-async function drawnRail({ BrowserWindow, ipcMain }) {
+// start-up, and hand `fn` a way to look at the rail and the tabs and to press them. What this
+// shows that the unit tests cannot: each path parses (an invalid one measures 0 x 0) and is painted
+// in the button's own colour, and the buttons take you to the sites they should. `shown` is every
+// site the shell asked the main process to put on stage, in order.
+async function inShell({ BrowserWindow, ipcMain }, fn) {
   const services = resolveServices({}, 'http://127.0.0.1:9');
+  const shown = [];
   const handlers = {
-    'app:state': () => ({ holeUrl: 'http://127.0.0.1:9', hasToken: false, perDay: 100, services: services.map((s) => ({ ...s, used: 0 })) }),
-    'stage:show': (_event, id) => ({ service: services.find((s) => s.id === id), url: '' }),
+    'app:state': () => ({
+      holeUrl: 'http://127.0.0.1:9', hasToken: false, perDay: 100,
+      services: services.map((s) => ({ ...s, used: 0 })), sections: sectionsOf(services),
+    }),
+    'stage:show': (_event, id) => {
+      shown.push(id);
+      return { service: services.find((s) => s.id === id), url: '' };
+    },
     'pipeline:status': () => ({ text: 'selftest', running: false }),
   };
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
@@ -68,27 +77,44 @@ async function drawnRail({ BrowserWindow, ipcMain }) {
   });
   try {
     await shell.loadFile(path.join(__dirname, '..', 'shell', 'index.html'));
-    const read = () => shell.webContents.executeJavaScript(`(() => {
-      const buttons = [...document.querySelectorAll('#rail button')];
-      return buttons.map((button) => {
+    const evaluate = (code) => shell.webContents.executeJavaScript(code);
+    const read = () => evaluate(`(() => {
+      const describe = (button) => {
         const path = button.querySelector('svg path');
         const box = path ? path.getBBox() : null;
         return {
           label: button.getAttribute('aria-label'),
+          text: button.textContent,
+          active: button.classList.contains('active'),
+          level: button.dataset.level || null,
           marked: Boolean(path),
           box: box && { x: box.x, y: box.y, width: box.width, height: box.height },
           fill: path ? getComputedStyle(path).fill : null,
           colour: getComputedStyle(button).color,
-          text: button.textContent,
         };
-      });
+      };
+      return {
+        rail: [...document.querySelectorAll('#rail button')].map(describe),
+        tabs: [...document.querySelectorAll('#tabs button')].map(describe),
+        tabsHidden: document.getElementById('tabs').hidden,
+      };
     })()`);
-    for (let i = 0; i < 50; i += 1) {
-      const rail = await read();
-      if (rail.length) return { services, rail };
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    throw new Error('the shell never drew a rail');
+    // The first state in which `ready` holds, or an error saying what never showed up.
+    const until = async (ready, what) => {
+      for (let i = 0; i < 50; i += 1) {
+        const now = await read();
+        if (ready(now)) return now;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`the shell never showed ${what}`);
+    };
+    // Press the button in the rail or the tab strip whose text is `name`.
+    const press = (area, name) => evaluate(`(() => {
+      const button = [...document.querySelectorAll('#${area} button')].find((b) => b.textContent === ${JSON.stringify(name)});
+      if (button) button.click();
+      return Boolean(button);
+    })()`);
+    return await fn({ services, shown, until, press });
   } finally {
     shell.destroy();
     for (const channel of Object.keys(handlers)) ipcMain.removeHandler(channel);
@@ -211,17 +237,70 @@ async function run({ BrowserWindow, ipcMain, limiter }) {
     }
   });
 
-  await check('the rail draws a mark for every service, in the button\'s own colour', async () => {
-    const { services, rail } = await drawnRail({ BrowserWindow, ipcMain });
-    assert.deepEqual(rail.map((b) => b.label), [...services.map((s) => s.name), 'Settings']);
-    for (const button of rail) {
-      assert.ok(button.marked, `${button.label} has no mark`);
-      assert.equal(button.text, '', `${button.label} still shows letters`);
-      const { x, y, width, height } = button.box;
-      assert.ok(width > 4 && height > 4, `${button.label}'s path measures ${width} x ${height}`);
-      assert.ok(x >= -0.5 && y >= -0.5 && x + width <= 24.5 && y + height <= 24.5, `${button.label} leaves its 24 x 24 box`);
-      assert.equal(button.fill, button.colour, `${button.label} is not painted in the button's colour`);
-    }
+  const marked = (button) => {
+    assert.ok(button.marked, `${button.label || button.text} has no mark`);
+    const { x, y, width, height } = button.box;
+    assert.ok(width > 4 && height > 4, `${button.label || button.text}'s path measures ${width} x ${height}`);
+    assert.ok(x >= -0.5 && y >= -0.5 && x + width <= 24.5 && y + height <= 24.5, `${button.label || button.text} leaves its 24 x 24 box`);
+    assert.equal(button.fill, button.colour, `${button.label || button.text} is not painted in the button's colour`);
+  };
+
+  await check('the rail is three places and the gear, each with a mark in the button\'s own colour', async () => {
+    await inShell({ BrowserWindow, ipcMain }, async ({ until, press }) => {
+      const dashboard = await until((s) => s.rail.length === 4 && s.rail[0].active, 'the rail');
+      assert.deepEqual(dashboard.rail.map((b) => b.label), ['Dashboard', 'Listings', 'Social', 'Settings']);
+      assert.deepEqual(dashboard.rail.map((b) => b.text), ['Dashboard', 'Listings', 'Social', '']);
+      assert.deepEqual(dashboard.rail.map((b) => b.level), ['view', 'capture', 'capture', null]);
+      dashboard.rail.forEach(marked);
+      assert.equal(dashboard.tabsHidden, true, 'the dashboard has one site and no strip');
+
+      await press('rail', 'Listings');
+      const listings = await until((s) => s.rail[1].active, 'Listings');
+      assert.equal(listings.tabsHidden, false);
+      listings.tabs.forEach(marked);
+    });
+  });
+
+  await check('the rail moves between places, the tabs between sites, and a place remembers its site', async () => {
+    await inShell({ BrowserWindow, ipcMain }, async ({ shown, until, press }) => {
+      const names = (now) => now.tabs.map((t) => t.text);
+      const lit = (now) => now.tabs.filter((t) => t.active).map((t) => t.text);
+      await until((s) => s.rail.length === 4 && s.rail[0].active, 'the dashboard');
+      assert.deepEqual(shown, ['hole']);
+
+      await press('rail', 'Listings');
+      let now = await until((s) => s.rail[1].active, 'Listings');
+      assert.equal(shown.at(-1), 'indeed');
+      assert.deepEqual(names(now), ['Indeed', 'Proofr', 'Unstop', 'Devfolio', 'Devpost', 'MLH']);
+      assert.deepEqual(lit(now), ['Indeed']);
+
+      await press('tabs', 'Unstop');
+      now = await until((s) => s.tabs.some((t) => t.active && t.text === 'Unstop'), 'the Unstop tab');
+      assert.equal(shown.at(-1), 'unstop');
+      assert.deepEqual(lit(now), ['Unstop']);
+
+      await press('rail', 'Social');
+      now = await until((s) => s.rail[2].active, 'Social');
+      assert.equal(shown.at(-1), 'linkedin');
+      assert.deepEqual(names(now), ['LinkedIn', 'Discord']);
+
+      await press('tabs', 'Discord');
+      await until((s) => s.tabs.some((t) => t.active && t.text === 'Discord'), 'the Discord tab');
+      assert.equal(shown.at(-1), 'discord');
+
+      await press('rail', 'Listings');
+      await until((s) => s.rail[1].active, 'Listings again');
+      assert.equal(shown.at(-1), 'unstop', 'Listings should come back to the site it was left on');
+
+      await press('rail', 'Social');
+      await until((s) => s.rail[2].active, 'Social again');
+      assert.equal(shown.at(-1), 'discord', 'Social should come back to the site it was left on');
+
+      await press('rail', 'Dashboard');
+      now = await until((s) => s.rail[0].active, 'the dashboard again');
+      assert.equal(shown.at(-1), 'hole');
+      assert.equal(now.tabsHidden, true);
+    });
   });
 
   await check('the load budget stops automated navigation', async () => {

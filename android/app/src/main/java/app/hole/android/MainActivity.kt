@@ -37,16 +37,18 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Hole on a phone: the same shell as the desktop app. The service rail runs along the bottom, the
- * page of the service you picked fills the middle (Hole's own pages are the dashboard, signed in
- * with the same web password), and the toolbar and pipeline line are the desktop's, folded to fit.
+ * Hole on a phone: the same shell as the desktop app. The rail of three places (Dashboard,
+ * Listings, Social) runs along the bottom, the sites in the place you are in are a strip of tabs
+ * above the page, the page of the site you picked fills the middle (Hole's own pages are the
+ * dashboard, signed in with the same web password), and the toolbar and pipeline line are the
+ * desktop's, folded to fit.
  *
  * The pipeline runs on the server, never here: the 12:00 GMT run happens whether or not this app
  * is open, and "Update listings" only asks the server to start one now.
  */
 class MainActivity : Activity() {
     private lateinit var prefs: Prefs
-    private lateinit var services: List<Service>
+    private lateinit var catalog: Catalog
     private lateinit var library: String
 
     private lateinit var stage: FrameLayout
@@ -54,7 +56,9 @@ class MainActivity : Activity() {
     private lateinit var emptyMessage: TextView
     private lateinit var emptyAddress: EditText
     private lateinit var rail: LinearLayout
-    private lateinit var railScroll: HorizontalScrollView
+    private lateinit var tabsBox: View
+    private lateinit var tabsScroll: HorizontalScrollView
+    private lateinit var tabs: LinearLayout
     private lateinit var settingsSlot: FrameLayout
     private lateinit var backButton: View
     private lateinit var serviceName: TextView
@@ -66,6 +70,7 @@ class MainActivity : Activity() {
 
     private val webViews = HashMap<String, WebView>()
     private val failedPages = HashMap<String, String>()
+    private val lastIn = HashMap<String, String>() // place id -> the site last open in it, so coming back lands where you were
     private var active: Service? = null
     private var resumed = false
     private var destroyed = false
@@ -78,7 +83,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         prefs = Prefs(this)
-        services = Services.parse(asset("services.json"))
+        catalog = Services.parse(asset("services.json"))
         library = asset("extractors.js")
         // The debug build can be inspected from chrome://inspect on a computer; a release build cannot.
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) WebView.setWebContentsDebuggingEnabled(true)
@@ -88,7 +93,9 @@ class MainActivity : Activity() {
         emptyMessage = findViewById(R.id.empty_message)
         emptyAddress = findViewById(R.id.empty_address)
         rail = findViewById(R.id.rail)
-        railScroll = findViewById(R.id.rail_scroll)
+        tabsBox = findViewById(R.id.tabs_box)
+        tabsScroll = findViewById(R.id.tabs_scroll)
+        tabs = findViewById(R.id.tabs)
         settingsSlot = findViewById(R.id.settings_slot)
         backButton = findViewById(R.id.back)
         serviceName = findViewById(R.id.service_name)
@@ -106,7 +113,7 @@ class MainActivity : Activity() {
         findViewById<View>(R.id.empty_open).setOnClickListener { openTypedAddress() }
 
         val remembered = savedInstanceState?.getString(STATE_ACTIVE)
-        show(services.firstOrNull { it.id == remembered } ?: services.first())
+        show(catalog.services.firstOrNull { it.id == remembered } ?: catalog.services.first())
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -147,7 +154,7 @@ class MainActivity : Activity() {
         val view = activeView()
         when {
             view != null && view.canGoBack() -> view.goBack()
-            active?.isHole == false -> show(services.first { it.isHole })
+            active?.isHole == false -> show(catalog.services.first { it.isHole })
             else -> super.onBackPressed()
         }
     }
@@ -161,6 +168,7 @@ class MainActivity : Activity() {
 
     private fun show(service: Service) {
         active = service
+        lastIn[service.section] = service.id
         val address = addressOf(service)
         if (address != null && service.id !in webViews) {
             val view = newWebView(service)
@@ -176,61 +184,132 @@ class MainActivity : Activity() {
             emptyAddress.setText("")
         }
         renderRail()
+        renderTabs()
         renderToolbar()
     }
 
+    /** Where a tap on a place goes: the site last open in it, or its first. */
+    private fun landingIn(section: Section): Service =
+        catalog.services.firstOrNull { it.id == lastIn[section.id] } ?: catalog.sitesIn(section).first()
+
     private fun renderRail() {
         rail.removeAllViews()
-        for (service in services) {
-            val params = LinearLayout.LayoutParams(dp(TILE), dp(TILE))
-            params.marginEnd = dp(8)
-            rail.addView(tile(service, active?.id == service.id) { show(service) }, params)
+        for (section in catalog.sections) {
+            val params = LinearLayout.LayoutParams(0, dp(PLACE_TILE), 1f)
+            params.marginStart = dp(4)
+            params.marginEnd = dp(4)
+            rail.addView(placeTile(section, active?.section == section.id) { show(landingIn(section)) }, params)
         }
         settingsSlot.removeAllViews()
-        settingsSlot.addView(tile(null, false) { openSettings() }, FrameLayout.LayoutParams(dp(TILE), dp(TILE)))
-        val index = services.indexOfFirst { it.id == active?.id }
-        railScroll.post { rail.getChildAt(index)?.let { railScroll.smoothScrollTo(maxOf(0, it.left - dp(16)), 0) } }
+        settingsSlot.addView(settingsTile { openSettings() }, FrameLayout.LayoutParams(dp(TILE), dp(TILE)))
     }
 
-    /** One button on the rail: the service's mark, with a dot for how much the app may do there. A null service is Settings. */
-    private fun tile(service: Service?, selected: Boolean, onClick: () -> Unit): View {
-        val frame = FrameLayout(this)
-        frame.setBackgroundResource(if (selected) R.drawable.bg_button_primary else R.drawable.bg_button)
-        frame.contentDescription = service?.let { "${it.name}, ${it.level.label}" } ?: getString(R.string.settings)
-        frame.isClickable = true
-        frame.isFocusable = true
-        frame.setOnClickListener { onClick() }
+    /** The sites of the place you are in, as tabs. A place with one site (the dashboard) has no strip. */
+    private fun renderTabs() {
+        val service = active ?: return
+        val sites = catalog.sitesIn(catalog.sectionOf(service))
+        tabs.removeAllViews()
+        tabsBox.visibility = if (sites.size > 1) View.VISIBLE else View.GONE
+        if (sites.size < 2) return
+        for (site in sites) {
+            val params = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(TAB))
+            params.marginEnd = dp(6)
+            tabs.addView(siteTab(site, site.id == service.id) { show(site) }, params)
+        }
+        val index = sites.indexOfFirst { it.id == service.id }
+        tabsScroll.post { tabs.getChildAt(index)?.let { tabsScroll.smoothScrollTo(maxOf(0, it.left - dp(16)), 0) } }
+    }
 
-        val ink = getColor(if (selected) R.color.hole_ink else R.color.hole_text)
-        val mark = markFor(service?.id ?: "settings")
-        if (mark != null) {
+    private fun tileBackground(view: View, selected: Boolean, description: String, onClick: () -> Unit) {
+        view.setBackgroundResource(if (selected) R.drawable.bg_button_primary else R.drawable.bg_button)
+        view.contentDescription = description
+        view.isClickable = true
+        view.isFocusable = true
+        view.setOnClickListener { onClick() }
+    }
+
+    private fun inkFor(selected: Boolean): Int = getColor(if (selected) R.color.hole_ink else R.color.hole_text)
+
+    /** One place on the rail: its mark over its name, with a dot for the most the app may do on any site in it. */
+    private fun placeTile(section: Section, selected: Boolean, onClick: () -> Unit): View {
+        val level = catalog.levelOf(section)
+        val frame = FrameLayout(this)
+        tileBackground(frame, selected, "${section.name}, ${level.label}", onClick)
+        val ink = inkFor(selected)
+
+        val stack = LinearLayout(this)
+        stack.orientation = LinearLayout.VERTICAL
+        stack.gravity = Gravity.CENTER
+        markFor(section.icon)?.let { mark ->
             val image = ImageView(this)
             image.setImageDrawable(mark)
             image.imageTintList = ColorStateList.valueOf(ink)
+            stack.addView(image, LinearLayout.LayoutParams(dp(22), dp(22)))
+        }
+        val name = TextView(this)
+        name.text = section.name
+        name.textSize = 10.5f
+        name.setTypeface(name.typeface, Typeface.BOLD)
+        name.setTextColor(ink)
+        name.gravity = Gravity.CENTER
+        name.maxLines = 1
+        val gap = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        gap.topMargin = dp(4)
+        stack.addView(name, gap)
+        frame.addView(stack, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
+
+        val dot = View(this)
+        dot.setBackgroundResource(R.drawable.bg_dot)
+        val colour = when (level) {
+            Level.VIEW -> R.color.hole_muted
+            Level.CAPTURE -> R.color.hole_good
+            Level.BATCH -> R.color.hole_accent
+        }
+        dot.backgroundTintList = ColorStateList.valueOf(getColor(colour))
+        val corner = FrameLayout.LayoutParams(dp(6), dp(6), Gravity.TOP or Gravity.END)
+        corner.topMargin = dp(5)
+        corner.marginEnd = dp(5)
+        frame.addView(dot, corner)
+        return frame
+    }
+
+    /** One site in the strip: its mark and name. */
+    private fun siteTab(site: Service, selected: Boolean, onClick: () -> Unit): View {
+        val tab = TextView(this)
+        tileBackground(tab, selected, "${site.name}, ${site.level.label}", onClick)
+        val ink = inkFor(selected)
+        tab.text = site.name
+        tab.textSize = 13f
+        if (selected) tab.setTypeface(tab.typeface, Typeface.BOLD)
+        tab.setTextColor(ink)
+        tab.gravity = Gravity.CENTER_VERTICAL
+        tab.maxLines = 1
+        tab.setPaddingRelative(dp(12), 0, dp(12), 0)
+        // A site added with no mark of its own is its name alone.
+        markFor(site.id)?.let { mark ->
+            mark.setBounds(0, 0, dp(14), dp(14))
+            tab.setCompoundDrawablesRelative(mark, null, null, null)
+            tab.compoundDrawablePadding = dp(6)
+            tab.compoundDrawableTintList = ColorStateList.valueOf(ink)
+        }
+        return tab
+    }
+
+    private fun settingsTile(onClick: () -> Unit): View {
+        val frame = FrameLayout(this)
+        tileBackground(frame, false, getString(R.string.settings), onClick)
+        val gear = markFor("settings")
+        if (gear != null) {
+            val image = ImageView(this)
+            image.setImageDrawable(gear)
+            image.imageTintList = ColorStateList.valueOf(inkFor(false))
             frame.addView(image, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
         } else {
-            // A service with no mark of its own shows the letters of its glyph, as the desktop rail does.
             val letters = TextView(this)
-            letters.text = service?.glyph ?: "⚙"
+            letters.text = "⚙"
             letters.gravity = Gravity.CENTER
-            letters.textSize = 12f
-            letters.setTypeface(letters.typeface, Typeface.BOLD)
-            letters.setTextColor(ink)
+            letters.setTextColor(inkFor(false))
             frame.addView(letters, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        }
-        if (service != null) {
-            val dot = View(this)
-            dot.setBackgroundResource(R.drawable.bg_dot)
-            val colour = when (service.level) {
-                Level.VIEW -> R.color.hole_muted
-                Level.CAPTURE -> R.color.hole_good
-                Level.BATCH -> R.color.hole_accent
-            }
-            dot.backgroundTintList = ColorStateList.valueOf(getColor(colour))
-            val params = FrameLayout.LayoutParams(dp(6), dp(6), Gravity.TOP or Gravity.END)
-            params.topMargin = dp(5)
-            params.marginEnd = dp(5)
-            frame.addView(dot, params)
         }
         return frame
     }
@@ -515,6 +594,8 @@ class MainActivity : Activity() {
     private companion object {
         const val STATE_ACTIVE = "active"
         const val TILE = 44
+        const val PLACE_TILE = 56
+        const val TAB = 34
         val OPENABLE = setOf("http", "https", "mailto", "tel")
     }
 }

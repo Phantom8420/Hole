@@ -11,9 +11,12 @@ nothing. The phone is for looking, for deciding, and for feeding the server thin
 
 ## What is in it
 
-- **The rail** along the bottom: Hole, LinkedIn, Indeed, Discord, Proofr, Unstop, Devfolio,
-  Devpost, MLH, and Settings. The same marks, the same order and the same access dots as the
-  desktop rail (grey is view-only, green is capture on request), and the same palette.
+- **The rail** along the bottom is three places and Settings: **Dashboard** (Hole), **Listings**
+  (Indeed, Proofr, Unstop, Devfolio, Devpost, MLH) and **Social** (LinkedIn, Discord). Listings and
+  Social show their sites as a strip of tabs above the page, each site with its own page and its own
+  sign-in, and a place remembers the site you were last on. The same marks, the same places and the
+  same access dots as the desktop rail (the dot is the most the app may do on any site in the place:
+  grey is view-only, green is capture on request), and the same palette.
 - **Hole** is the dashboard itself, in a WebView: to apply, applied, freelance and contract, upcoming
   competitions, the Pipeline panel. You sign in with the same web password, typed into the page.
   Links out to a posting open in your browser.
@@ -74,7 +77,7 @@ stale:
 | desktop | android |
 |---|---|
 | `shell/icons.js` | `res/drawable/ic_*.xml`, and the launcher icon |
-| `src/services.js` | `assets/services.json` |
+| `src/services.js` (the places and the services in them) | `assets/services.json` |
 | `src/extractors.js` | `assets/extractors.js` |
 | `shell/shell.css` | `res/values/hole_colors.xml` |
 

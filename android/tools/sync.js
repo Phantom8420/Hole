@@ -3,8 +3,8 @@
 
 // What the Android app takes from the desktop app, so the two cannot drift apart:
 //
-//   desktop/shell/icons.js     -> res/drawable/ic_<id>.xml   the marks on the rail (and the launcher icon)
-//   desktop/src/services.js    -> assets/services.json       which services, where, what each may do
+//   desktop/shell/icons.js     -> res/drawable/ic_<id>.xml   the marks on the bar and tabs (and the launcher icon)
+//   desktop/src/services.js    -> assets/services.json       the places, the services in them, what each may do
 //   desktop/src/extractors.js  -> assets/extractors.js       what "Capture page" runs inside the page
 //   desktop/shell/shell.css    -> res/values/hole_colors.xml the palette
 //
@@ -18,7 +18,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const MAIN = path.join(__dirname, '..', 'app', 'src', 'main');
 
 const { ICONS } = require(path.join(ROOT, 'desktop', 'shell', 'icons.js'));
-const { BUILTIN } = require(path.join(ROOT, 'desktop', 'src', 'services.js'));
+const { BUILTIN, SECTIONS } = require(path.join(ROOT, 'desktop', 'src', 'services.js'));
 const extractors = require(path.join(ROOT, 'desktop', 'src', 'extractors.js'));
 
 // The dark ink on an orange tile is written out in shell.css (.active, button.primary), not named.
@@ -130,9 +130,10 @@ ${rows}
 `;
 }
 
+// The places on the bar and the sites in them, in the desktop's order.
 function servicesJson() {
-  const rows = BUILTIN.map(({ id, name, glyph, url, level, extractors: names }) => ({ id, name, glyph, url, level, extractors: names }));
-  return `${JSON.stringify(rows, null, 2)}\n`;
+  const services = BUILTIN.map(({ id, name, glyph, url, level, section, extractors: names }) => ({ id, name, glyph, url, level, section, extractors: names }));
+  return `${JSON.stringify({ sections: SECTIONS, services }, null, 2)}\n`;
 }
 
 // The extractors are plain functions with no closures (the desktop app serialises each into the page),

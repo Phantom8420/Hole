@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveServices } = require('../src/services');
+const { resolveServices, sectionsOf } = require('../src/services');
 
 const byId = (list, id) => list.find((s) => s.id === id);
 
@@ -46,4 +46,53 @@ test('non-web addresses are refused and custom services are validated', () => {
   assert.equal(byId(list, 'ok-one').level, 'view');
   assert.equal(byId(list, 'Bad Id'), undefined);
   assert.equal(list.filter((s) => s.id === 'hole').length, 1);
+});
+
+test('the rail is three places: Dashboard, Listings and Social', () => {
+  const list = resolveServices({}, 'https://hole.example');
+  const places = sectionsOf(list);
+  assert.deepEqual(places.map((p) => [p.id, p.name, p.icon]), [
+    ['dashboard', 'Dashboard', 'hole'],
+    ['listings', 'Listings', 'listings'],
+    ['social', 'Social', 'social'],
+  ]);
+  assert.deepEqual(places[0].services, ['hole']);
+  assert.deepEqual(places[1].services, ['indeed', 'proofr', 'unstop', 'devfolio', 'devpost', 'mlh']);
+  assert.deepEqual(places[2].services, ['linkedin', 'discord']);
+  // every site is in exactly one place
+  assert.deepEqual(places.flatMap((p) => p.services).sort(), list.map((s) => s.id).sort());
+});
+
+test('a place shows the most the app may do on any of its sites', () => {
+  const level = (overrides, id) => sectionsOf(resolveServices(overrides)).find((p) => p.id === id).level;
+  assert.equal(level({}, 'dashboard'), 'view');
+  assert.equal(level({}, 'listings'), 'capture');
+  assert.equal(level({ devpost: { level: 'batch' } }, 'listings'), 'batch');
+  assert.equal(level({ linkedin: { level: 'view' }, discord: { level: 'view' } }, 'social'), 'view');
+  assert.equal(level({ linkedin: { level: 'view' } }, 'social'), 'capture');
+});
+
+test('sites can be moved between places in services.json, but Hole stays the dashboard', () => {
+  const list = resolveServices({
+    discord: { section: 'listings' },
+    hole: { section: 'social' },
+    mlh: { section: 'nowhere' },
+    custom: [
+      { id: 'a', name: 'A', url: 'https://a.example', section: 'social' },
+      { id: 'b', name: 'B', url: 'https://b.example' },
+      { id: 'c', name: 'C', url: 'https://c.example', section: 'dashboard' },
+    ],
+  });
+  const place = (id) => byId(list, id).section;
+  assert.equal(place('discord'), 'listings');
+  assert.equal(place('hole'), 'dashboard');
+  assert.equal(place('mlh'), 'listings');
+  assert.equal(place('a'), 'social');
+  assert.equal(place('b'), 'listings'); // no place named: Listings
+  assert.equal(place('c'), 'listings'); // the dashboard is Hole's alone
+});
+
+test('a place with no sites is left off the rail', () => {
+  const list = resolveServices({ linkedin: { section: 'listings' }, discord: { section: 'listings' } });
+  assert.deepEqual(sectionsOf(list).map((p) => p.id), ['dashboard', 'listings']);
 });

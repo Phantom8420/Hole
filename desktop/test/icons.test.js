@@ -5,11 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { BUILTIN } = require('../src/services');
+const { BUILTIN, SECTIONS } = require('../src/services');
 const { ICONS } = require('../shell/icons');
 
-test('every built-in service has a mark, and so does the settings button', () => {
-  for (const id of [...BUILTIN.map((s) => s.id), 'settings']) {
+test('every place on the rail and every built-in service has a mark, and so does the settings button', () => {
+  for (const id of [...SECTIONS.map((p) => p.icon), ...BUILTIN.map((s) => s.id), 'settings']) {
     assert.ok(ICONS[id], `no mark for ${id}`);
   }
 });

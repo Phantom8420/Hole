@@ -122,7 +122,9 @@ that captured them elsewhere; it is off unless `JOBSEARCH_API_TOKEN` is set and 
 
 `desktop/` is an Electron app (`npm install && npm start`): the Hole UI plus an embedded
 browser per service (LinkedIn, Indeed, Discord, Devpost, ...), each in its own persistent
-profile. The app drives those pages itself (`src/driver.js`) -- no extension, no debugging
+profile. The rail is three places -- Dashboard (Hole), Listings (the job and hackathon sites,
+shown as tabs) and Social (LinkedIn, Discord) -- defined with the services in `src/services.js`.
+The app drives those pages itself (`src/driver.js`) -- no extension, no debugging
 port, nothing to approve -- and posts what you tick in its inbox to `/api/ingest`. What it
 may do per service is a level in `src/services.js` (view / capture / batch); LinkedIn,
 Indeed and Discord stay at capture, matching the rule in `sourcing/` that nothing automates
@@ -132,7 +134,7 @@ a site that forbids it. `npm run selftest` drives a real embedded page and the e
 ## Android app
 
 `android/` is the phone version of that shell (Kotlin, no libraries beyond the framework): the same
-service rail with the same marks, the Hole dashboard in a WebView, Capture and the inbox, and Share to
+three places (Dashboard, Listings, Social) with the same marks, the Hole dashboard in a WebView, Capture and the inbox, and Share to
 Hole from other apps. It is a remote for the server, not the pipeline on the phone: the 12:00 GMT run and
 everything it does stay on the VM, and the app's "Update listings" only calls `POST /api/run` (status
 from `GET /api/status`, both bearer-token). Its icons, service list, extractors and palette are
