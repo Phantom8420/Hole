@@ -1,0 +1,4 @@
+# The wrapper script runs on Linux and macOS whatever line-ending setting the checkout machine has.
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary

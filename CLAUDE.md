@@ -129,6 +129,17 @@ Indeed and Discord stay at capture, matching the rule in `sourcing/` that nothin
 a site that forbids it. `npm run selftest` drives a real embedded page and the extractors;
 `HOLE_DESKTOP_E2E=1 python -m unittest tests.test_desktop_e2e` also posts to the real server.
 
+## Android app
+
+`android/` is the phone version of that shell (Kotlin, no libraries beyond the framework): the same
+service rail with the same marks, the Hole dashboard in a WebView, Capture and the inbox, and Share to
+Hole from other apps. It is a remote for the server, not the pipeline on the phone: the 12:00 GMT run and
+everything it does stay on the VM, and the app's "Update listings" only calls `POST /api/run` (status
+from `GET /api/status`, both bearer-token). Its icons, service list, extractors and palette are
+generated from the desktop's by `node android/tools/sync.js`, and `npm test` in `desktop/` fails when
+they are stale, so change those on the desktop side and re-run the script. Build and test with
+`gradlew assembleDebug` / `testDebugUnitTest` (see `android/README.md`; nothing has been run on a device).
+
 ## Codex config detected
 
 `~/.codex/config.toml` exists. Reply `/import` to scan it for importable items (MCP

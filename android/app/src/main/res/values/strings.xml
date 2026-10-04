@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hole</string>
+    <string name="share_label">Send to Hole</string>
+    <string name="glyph_back" translatable="false">←</string>
+    <string name="glyph_reload" translatable="false">↻</string>
+    <string name="address_hint">Web address</string>
+    <string name="address_hint_https" translatable="false">https://...</string>
+    <string name="back">Back</string>
+    <string name="reload">Reload</string>
+    <string name="capture">Capture</string>
+    <string name="inbox_empty">Inbox 0</string>
+    <string name="update_listings">Update listings</string>
+    <string name="open">Open</string>
+    <string name="captured">Captured</string>
+    <string name="clear">Clear</string>
+    <string name="done">Done</string>
+    <string name="send_selected">Send selected to Hole</string>
+    <string name="settings">Settings</string>
+    <string name="settings_address">Hole address</string>
+    <string name="settings_token">API token</string>
+    <string name="settings_hint">Must match JOBSEARCH_API_TOKEN on the server. It is kept encrypted with a key in the Android Keystore, and never leaves this phone except to your server. Your web password is not stored: you type it into the Hole page.</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+</resources>

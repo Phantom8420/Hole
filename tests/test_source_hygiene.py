@@ -12,8 +12,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FOLDERS = ("jobsearch", "tests", "desktop/src", "desktop/shell", "desktop/test")
-SUFFIXES = {".py", ".js", ".html", ".css", ".toml", ".json"}
+FOLDERS = (
+    "jobsearch", "tests",
+    "desktop/src", "desktop/shell", "desktop/test", "desktop/tools",
+    "android/tools", "android/app/src",
+)
+SUFFIXES = {".py", ".js", ".html", ".css", ".toml", ".json", ".kt", ".kts", ".xml"}
 ALLOWED = {"\t", "\n", "\r", "\f"}
 
 

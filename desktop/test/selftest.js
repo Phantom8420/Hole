@@ -189,6 +189,28 @@ async function run({ BrowserWindow, ipcMain, limiter }) {
     assert.equal(fallback.title, 'interact');
   });
 
+  // The phone runs android/app/src/main/assets/extractors.js in the page's own world, wrapped as
+  // Capture.script() in Capture.kt wraps it. Here the same text runs in real Chromium, and has to
+  // find what the desktop extractors find on the same pages.
+  await check('the Android capture script finds what the desktop extractors find', async () => {
+    const library = fs.readFileSync(path.join(__dirname, '..', '..', 'android', 'app', 'src', 'main', 'assets', 'extractors.js'), 'utf8');
+    const script = (names) => `(function(){try{${library}\nreturn JSON.stringify(holeExtract(${JSON.stringify(names)}));}`
+      + 'catch(e){return JSON.stringify({error:String((e&&e.message)||e)});}})()';
+    for (const [page, names] of [
+      ['jobposting.html', ['linkedin', 'jsonld']],
+      ['linkedin-list.html', ['linkedin', 'jsonld']],
+      ['indeed-list.html', ['indeed', 'jsonld']],
+      ['links.html', ['links']],
+      ['interact', ['linkedin', 'jsonld']], // nothing recognised: both fall back to the page itself
+    ]) {
+      await driver.goto(`${base}/${page}`);
+      const onPhone = JSON.parse(await view.webContents.executeJavaScript(script(names)));
+      assert.ok(Array.isArray(onPhone), `${page}: ${JSON.stringify(onPhone)}`);
+      assert.ok(onPhone.length > 0, `${page}: found nothing`);
+      assert.deepEqual(onPhone, await extract(driver, names), page);
+    }
+  });
+
   await check('the rail draws a mark for every service, in the button\'s own colour', async () => {
     const { services, rail } = await drawnRail({ BrowserWindow, ipcMain });
     assert.deepEqual(rail.map((b) => b.label), [...services.map((s) => s.name), 'Settings']);

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The desktop shell's dark, warm look (desktop/shell/shell.css), on the framework's own
+         Material theme, so the app needs no library for it. -->
+    <style name="Theme.Hole" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/hole_bg</item>
+        <item name="android:colorBackground">@color/hole_bg</item>
+        <item name="android:statusBarColor">@color/hole_bg</item>
+        <item name="android:navigationBarColor">@color/hole_bg</item>
+        <item name="android:textColorPrimary">@color/hole_text</item>
+        <item name="android:textColorSecondary">@color/hole_muted</item>
+        <item name="android:textColorHint">@color/hole_muted</item>
+        <item name="android:colorAccent">@color/hole_accent</item>
+        <item name="android:colorControlActivated">@color/hole_accent</item>
+        <item name="android:colorControlNormal">@color/hole_muted</item>
+        <item name="android:alertDialogTheme">@style/Theme.Hole.Dialog</item>
+    </style>
+
+    <style name="Theme.Hole.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorBackground">@color/hole_panel</item>
+        <item name="android:textColorPrimary">@color/hole_text</item>
+        <item name="android:textColorSecondary">@color/hole_muted</item>
+        <item name="android:textColorHint">@color/hole_muted</item>
+        <item name="android:colorAccent">@color/hole_accent</item>
+    </style>
+
+    <!-- Buttons, as the shell draws them: a panel-coloured tile with a hairline border. -->
+    <style name="HoleButton">
+        <item name="android:background">@drawable/bg_button</item>
+        <item name="android:textColor">@color/hole_text</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:paddingHorizontal">12dp</item>
+        <item name="android:paddingVertical">0dp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <style name="HoleButton.Primary">
+        <item name="android:background">@drawable/bg_button_primary</item>
+        <item name="android:textColor">@color/hole_ink</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="HoleInput">
+        <item name="android:background">@drawable/bg_input</item>
+        <item name="android:textColor">@color/hole_text</item>
+        <item name="android:textColorHint">@color/hole_muted</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:paddingHorizontal">10dp</item>
+        <item name="android:paddingVertical">8dp</item>
+        <item name="android:maxLines">1</item>
+    </style>
+</resources>
