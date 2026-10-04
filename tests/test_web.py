@@ -13,13 +13,13 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from jobsearch import db  # noqa: E402
+from jobsearch import db, runner  # noqa: E402
 from jobsearch.config import Config  # noqa: E402
 from jobsearch.web import WebError, serve  # noqa: E402
 from jobsearch.web.server import App  # noqa: E402
@@ -98,7 +98,7 @@ class WebTestCase(unittest.TestCase):
                 "decision_reasons": '["autonomous is off -- prepared but not sent"]',
             },
         )
-        db.insert_row(conn, "pipeline_runs", {"started_at": db.now(), "mode": "review-only"})
+        db.insert_row(conn, "pipeline_runs", {"started_at": db.now(), "finished_at": db.now(), "mode": "review-only"})
         conn.commit()
         conn.close()
 
@@ -369,6 +369,10 @@ class DashboardListTests(WebTestCase):
         self.assertNotIn("Skipped Wizard", body)
         self.assertNotIn("Unscored Wizard", body)
 
+    def test_to_apply_shows_the_pay_when_the_posting_states_it(self) -> None:
+        self.add_job("Paid Intern", compensation="USD 45-60 / hour", fit_score=44.0)
+        self.assertIn("USD 45-60 / hour", self.dashboard())
+
     def test_a_lead_with_no_fit_still_counts_and_a_closed_posting_does_not(self) -> None:
         # a lead whose text was out of reach is unscored, not a poor fit
         self.add_job("Workday Lead Intern", fit_score=None)
@@ -377,6 +381,76 @@ class DashboardListTests(WebTestCase):
         self.assertIn("Workday Lead Intern", body)
         self.assertIn("2 past your filters", body)
         self.assertNotIn("Gone Intern", body)
+
+    def test_freelance_gigs_have_their_own_list_and_stay_out_of_to_apply(self) -> None:
+        soon = (date.today() + timedelta(days=3)).isoformat()
+        gone = (date.today() - timedelta(days=2)).isoformat()
+        self.add_job("Build a port scanner", employment_type="freelance", company="Acme DAO",
+                     compensation="USDC 500", deadline=soon, fit_score=20.0)
+        self.add_job("Old bounty", employment_type="freelance", deadline=gone)
+        self.add_job("Contract Python dev", employment_type="contract", fit_score=9.0)
+        body = self.dashboard()
+        self.assertIn("Freelance &amp; contract", body)
+        self.assertIn("2 open gigs", body)
+        self.assertIn("Build a port scanner", body)
+        self.assertIn("USDC 500", body)
+        self.assertIn("Contract Python dev", body)
+        self.assertNotIn("Old bounty", body)  # its deadline has passed
+        self.assertIn("1 past your filters", body)  # the fixture's posting only: gigs are not jobs to apply for
+
+    def test_the_pipeline_panel_says_when_it_runs_next_and_offers_to_run_now(self) -> None:
+        conn = db.connect(self.db_path)
+        conn.execute("DELETE FROM pipeline_runs")
+        conn.commit()
+        conn.close()
+        body = self.dashboard()
+        for text in ("Pipeline", "Not run yet", "Next run 12:00 GMT", "Auto-apply is off",
+                     "nothing is sent", "1 remaining · 0 applied", "Update listings now", 'action="/run"'):
+            with self.subTest(text):
+                self.assertIn(text, body)
+
+    def test_the_panel_reports_the_last_run_and_drops_the_button_while_one_goes(self) -> None:
+        started = datetime.now(timezone.utc) - timedelta(hours=3)
+        conn = db.connect(self.db_path)
+        db.insert_row(conn, "pipeline_runs", {
+            "started_at": started.replace(microsecond=0).isoformat(),
+            "finished_at": (started + timedelta(minutes=9)).replace(microsecond=0).isoformat(),
+            "mode": "review-only", "sourced": 41, "tailored": 8, "sent": 0, "errors": 2})
+        conn.commit()
+        body = self.dashboard()
+        self.assertIn("Last run 2 h ago", body)
+        self.assertIn("41 new · 8 drafted · 0 sent · 2 errors", body)
+        self.assertIn("Update listings now", body)
+        db.insert_row(conn, "pipeline_runs", {"started_at": db.now(), "mode": "review-only"})
+        conn.commit()
+        conn.close()
+        body = self.dashboard()
+        self.assertIn("Running now", body)
+        self.assertNotIn("Update listings now", body)
+
+    def test_the_panel_says_when_applications_go_out_by_themselves(self) -> None:
+        self.app.config = Config.from_dict({"autonomous": True, "limits": {"max_applications_per_day": 30}})
+        body = self.dashboard()
+        self.assertIn("Auto-apply is on", body)
+        self.assertIn("30 a day", body)
+
+    def test_the_run_button_starts_a_run_and_needs_the_token(self) -> None:
+        with mock.patch.object(runner, "start") as start:
+            status, _ = self.app.post("/run", {"token": "wrong"})
+            self.assertEqual(status, 403)
+            start.assert_not_called()
+            self.assertEqual(self.app.post("/run", {"token": TOKEN}), (303, "/"))
+            start.assert_called_once()
+            self.assertEqual(self.app.post("/run", {"token": TOKEN}), (303, "/"))  # a second press starts nothing
+            start.assert_called_once()
+
+    def test_a_gig_you_applied_to_leaves_the_freelance_list(self) -> None:
+        gig_id = self.add_job("Port scanner gig", employment_type="freelance", url="https://example.com/gig")
+        self.assertIn("Port scanner gig", self.dashboard())
+        self.app.post(f"/jobs/{gig_id}/applied", {"token": TOKEN})
+        body = self.dashboard()
+        self.assertIn("0 open gigs", body)
+        self.assertIn("1 approved or sent", body)  # it is under Applied now
 
     def test_applied_lists_what_you_said_yes_to_and_takes_it_off_to_apply(self) -> None:
         body = self.dashboard()

@@ -23,6 +23,7 @@ from .base import (
     Posting,
     SourceError,
     SourceResult,
+    employment_type,
     fetch_json,
     html_to_text,
     iso_date,
@@ -34,6 +35,9 @@ ARBEITNOW_API = "https://www.arbeitnow.com/api/job-board-api"
 JOBICY_API = "https://jobicy.com/api/v2/remote-jobs"
 HIMALAYAS_API = "https://himalayas.app/jobs/api"
 WORKING_NOMADS_API = "https://www.workingnomads.com/api/exposed_jobs/"
+SUPERTEAM_API = "https://earn.superteam.fun/api/listings/"
+SUPERTEAM_DETAIL = "https://earn.superteam.fun/api/listings/details/{slug}"
+SUPERTEAM_PAGE = "https://earn.superteam.fun/listing/{slug}"
 
 
 def _text(value: Any) -> str:
@@ -82,6 +86,7 @@ def fetch_remotive(*, limit: int = 100, search: str = "") -> SourceResult:
                 description=html_to_text(row.get("description")),
                 compensation=_text(row.get("salary")) or None,
                 posted_at=iso_date(row.get("publication_date")),
+                employment_type=employment_type(row.get("job_type")),
             )
         )
     return result
@@ -111,17 +116,10 @@ def fetch_remoteok(*, limit: int = 100) -> SourceResult:
                 description=html_to_text(row.get("description")),
                 compensation=_salary(row.get("salary_min"), row.get("salary_max")),
                 posted_at=iso_date(row.get("date") or row.get("epoch")),
+                employment_type=employment_type(row.get("tags")),
             )
         )
     return result
-
-
-def _arbeitnow_type(job_types: Any) -> str | None:
-    """Arbeitnow tags each posting ("Student", "Intern", "Working student", ...)."""
-    kinds = {str(t).strip().lower() for t in job_types or []}
-    if kinds & {"intern", "internship", "student", "working student", "student college"}:
-        return "internship"
-    return None
 
 
 def fetch_arbeitnow(*, limit: int = 100, remote_only: bool = True) -> SourceResult:
@@ -150,7 +148,7 @@ def fetch_arbeitnow(*, limit: int = 100, remote_only: bool = True) -> SourceResu
                 url=_text(row.get("url")),
                 description=html_to_text(row.get("description")),
                 posted_at=iso_date(row.get("created_at")),
-                employment_type=_arbeitnow_type(row.get("job_types")),
+                employment_type=employment_type(row.get("job_types")),
             )
         )
         if len(result.postings) >= limit:
@@ -187,6 +185,7 @@ def fetch_jobicy(*, limit: int = 50, geo: str = "", industry: str = "") -> Sourc
                     _text(row.get("salaryCurrency")) or "USD",
                 ),
                 posted_at=iso_date(row.get("pubDate")),
+                employment_type=employment_type(row.get("jobType")),
             )
         )
     return result
@@ -218,6 +217,7 @@ def fetch_himalayas(*, limit: int = 50) -> SourceResult:
                     _text(row.get("salaryPeriod")),
                 ),
                 posted_at=iso_date(row.get("pubDate")),
+                employment_type=employment_type(row.get("employmentType")),
             )
         )
     return result
@@ -249,6 +249,73 @@ def fetch_working_nomads(*, limit: int = 100) -> SourceResult:
     return result
 
 
+def fetch_superteam(*, limit: int = 50) -> SourceResult:
+    """Paid gigs and bounties on Superteam Earn, rewarded in USDC or USDG (a dollar).
+
+    Open to anyone unless a listing names a region -- many belong to one country's
+    chapter -- so those are left out. Hackathons are competitions and are found
+    elsewhere. The list has no text, so each listing's page is read for it.
+    """
+    result = SourceResult(source="superteam")
+    try:
+        rows = fetch_json(SUPERTEAM_API)
+    except SourceError as exc:
+        result.errors.append(str(exc))
+        return result
+    if not isinstance(rows, list):
+        result.errors.append(f"{SUPERTEAM_API}: expected a list of listings")
+        return result
+
+    for row in rows[:limit]:
+        slug = _text(row.get("slug"))
+        if not slug or row.get("type") == "hackathon":
+            continue
+        try:
+            detail = fetch_json(SUPERTEAM_DETAIL.format(slug=slug)) or {}
+        except SourceError as exc:
+            result.errors.append(str(exc))
+            continue
+        region = _text(detail.get("region"))
+        if region and region.lower() not in {"global", "worldwide"}:
+            continue
+
+        token = _text(row.get("token")) or "USD"
+        pay = None
+        if row.get("compensationType") == "range":
+            pay = _salary(row.get("minRewardAsk"), row.get("maxRewardAsk"), token)
+        pay = pay or _salary(0, row.get("rewardAmount"), token)
+        deadline = iso_date(row.get("deadline"))
+        skills = "; ".join(
+            f"{s.get('skills')}" + (f" ({', '.join(s.get('subskills') or [])})" if s.get("subskills") else "")
+            for s in detail.get("skills") or [] if isinstance(s, dict) and s.get("skills")
+        )
+        text = "\n\n".join(part for part in (
+            html_to_text(detail.get("description")),
+            html_to_text(detail.get("requirements")),
+            f"Skills: {skills}" if skills else "",
+            f"Reward: {pay}. Deadline: {deadline}." if pay or deadline else "",
+        ) if part)
+        page = SUPERTEAM_PAGE.format(slug=slug)
+        result.postings.append(
+            Posting(
+                source="superteam",
+                external_id=_text(row.get("id")) or slug,
+                company=_text((row.get("sponsor") or {}).get("name")),
+                title=_text(row.get("title")),
+                location="Remote (worldwide)",
+                remote=True,
+                url=page,
+                description=text,
+                compensation=pay,
+                posted_at=iso_date(detail.get("publishedAt")),
+                employment_type="freelance",
+                deadline=deadline,
+            )
+        )
+    result.complete = not result.errors
+    return result
+
+
 # Name -> connector, for config-driven runs. Each takes only keyword arguments
 # and never raises: a board being down degrades the run, it does not end it.
 REMOTE_BOARDS: dict[str, Callable[..., SourceResult]] = {
@@ -258,6 +325,7 @@ REMOTE_BOARDS: dict[str, Callable[..., SourceResult]] = {
     "jobicy": fetch_jobicy,
     "himalayas": fetch_himalayas,
     "workingnomads": fetch_working_nomads,
+    "superteam": fetch_superteam,
 }
 
 

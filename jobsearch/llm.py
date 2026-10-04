@@ -24,6 +24,7 @@ silently empty resume rather than an error:
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -94,7 +95,28 @@ _STOP_REASONS = {
 
 
 class ModelError(RuntimeError):
-    """Anything that stopped us getting usable text back."""
+    """Anything that stopped us getting usable text back.
+
+    `transient` marks the ones worth trying again later (out of quota, overloaded, timed
+    out) as opposed to a refusal or a bad key.
+    """
+
+    def __init__(self, message: str = "", *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
+
+
+# Seconds to wait before each retry of a call that failed in a way that may pass.
+RETRY_WAITS = (20, 60, 120)
+_TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_WORDS = ("resource_exhausted", "unavailable", "overloaded", "rate limit", "quota", "timed out", "deadline")
+
+
+def _transient(exc: Exception) -> bool:
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code in _TRANSIENT_CODES:
+        return True
+    return any(word in str(exc).lower() for word in _TRANSIENT_WORDS)
 
 
 def load_dotenv(path: Path | None = None, *, only: frozenset[str] | None = None) -> None:
@@ -194,14 +216,24 @@ def _call_gemini(
     if temperature is not None:
         config["temperature"] = temperature
 
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=user_message,
-            config=types.GenerateContentConfig(**config),
-        )
-    except Exception as exc:
-        raise ModelError(f"Gemini call failed: {type(exc).__name__}: {exc}") from exc
+    attempt = 0
+    while True:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=user_message,
+                config=types.GenerateContentConfig(**config),
+            )
+            break
+        except Exception as exc:
+            transient = _transient(exc)
+            if transient and attempt < len(RETRY_WAITS):
+                time.sleep(RETRY_WAITS[attempt])
+                attempt += 1
+                continue
+            raise ModelError(
+                f"Gemini call failed: {type(exc).__name__}: {exc}", transient=transient
+            ) from exc
 
     # A blocked *prompt* never produces candidates at all.
     feedback = getattr(response, "prompt_feedback", None)

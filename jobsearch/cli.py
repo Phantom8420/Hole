@@ -1250,6 +1250,8 @@ def cmd_config(args: argparse.Namespace) -> int:
         _out(f"  title must say        {', '.join(config.search.require_title_keywords)}")
     if config.search.max_experience_years is not None:
         _out(f"  max experience asked  {config.search.max_experience_years} years")
+    if config.search.include_freelance:
+        _out("  freelance & contract  included, judged apart from the title and level rules")
     _out("")
     _out("  sources")
     if not config.sources:

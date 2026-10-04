@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Sequence
 
 from .. import answers as answer_bank
-from .. import db
+from .. import db, runner, worklists
 from ..config import Config
 from . import evoque as E
 from . import geo, pages
@@ -194,18 +194,13 @@ def _job_rows(jobs: Sequence[dict[str, Any]]) -> str:
     return "".join(out)
 
 
-# The dashboard's three working lists. Applied means you said yes to it, whether
-# or not it has gone out yet: the same set policy.PolicyContext treats as "already
-# applied", so a posting never sits in To apply and Applied at once.
-APPLIED_STATUSES = ("approved", "sent", "responded")
+# The dashboard's working lists are defined in worklists.py, which the status the apps
+# read shares; only how a row looks is decided here.
+APPLIED_STATUSES = worklists.APPLIED_STATUSES
 _APP_TONE = {"sent": "good", "approved": "good", "responded": "good", "rejected": "bad", "drafted": ""}
-_APPLIED_IN = "(" + ", ".join(f"'{s}'" for s in APPLIED_STATUSES) + ")"
-
-# Postings that got past the filters and that you have not applied to.
-_TO_APPLY = (
-    "status IN ('scored', 'tailored') AND id NOT IN ("
-    f"SELECT job_id FROM applications WHERE job_id IS NOT NULL AND status IN {_APPLIED_IN})"
-)
+_APPLIED_IN = worklists.APPLIED_IN
+_TO_APPLY = worklists.TO_APPLY
+_FREELANCE = worklists.FREELANCE
 
 
 def _to_apply(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
@@ -217,6 +212,20 @@ def _to_apply(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]
         ).fetchall()
     )
     total = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {_TO_APPLY}").fetchone()[0]  # noqa: S608
+    return rows, int(total)
+
+
+def _freelance(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
+    """Freelance and contract gigs that got past the filters: soonest deadline first,
+    then by fit."""
+    rows = db.rows_to_dicts(
+        conn.execute(
+            f"SELECT * FROM jobs WHERE {_FREELANCE} "  # noqa: S608 -- constants only
+            "ORDER BY deadline IS NULL, deadline, IFNULL(fit_score, -1) DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    )
+    total = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {_FREELANCE}").fetchone()[0]  # noqa: S608
     return rows, int(total)
 
 
@@ -248,6 +257,75 @@ def _upcoming(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]
     return still_open[:limit], len(still_open)
 
 
+def _ago(value: Any, now: datetime) -> str:
+    """"3 h ago" for an ISO timestamp, or "" when it cannot be read."""
+    when = runner._utc(value)
+    if when is None:
+        return ""
+    minutes = max(0, int((now - when).total_seconds() // 60))
+    if minutes < 2:
+        return "just now"
+    if minutes < 120:
+        return f"{minutes} min ago"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} h ago"
+    return f"{minutes // 1440} days ago"
+
+
+def _run_panel(conn: sqlite3.Connection, config: Config, token: str) -> str:
+    """The pipeline at a glance: is it running, how the last run went, when the next one is,
+    what is left and what is done, and a button to run it now."""
+    now = datetime.now(timezone.utc)
+    info = runner.status(conn, config, now)
+    run, counts = info["run"], info["counts"]
+
+    if info["running"]:
+        headline = "Running now"
+        detail = f"started {_ago(run['started_at'], now)}; the counts below update when it ends"
+    elif run:
+        headline = f"Last run {_ago(run['finished_at'] or run['started_at'], now)}"
+        detail = (
+            f"{run['sourced']:,} new · {run['tailored']:,} drafted · {run['sent']:,} sent"
+            + (f" · {run['errors']} error{'s' if run['errors'] != 1 else ''}" if run["errors"] else "")
+        )
+    else:
+        headline, detail = "Not run yet", "press the button, or wait for the daily run"
+
+    due = datetime.fromisoformat(info["next_run_at"])
+    wait = int((due - now).total_seconds() // 60)
+    caps = info["caps"]
+    rows = (
+        _stack_row("", headline, esc(detail))
+        + _stack_row("", f"Next run {info['run_at']} GMT", esc(f"in {wait // 60} h {wait % 60:02d} min, every day"))
+        + _stack_row(
+            "",
+            "Auto-apply is on" if info["auto_apply"] else "Auto-apply is off",
+            esc(
+                f"sends up to {caps['apply_per_run']} a run, {caps['apply_per_day']} a day, "
+                f"{caps['per_company_per_week']} per company a week"
+                if info["auto_apply"]
+                else "drafts are prepared and wait for your yes; nothing is sent"
+            ),
+        )
+        + _stack_row(
+            "",
+            f"{counts['remaining']:,} remaining · {counts['applied']:,} applied",
+            esc(f"{counts['drafted']:,} drafts waiting · {counts['freelance']:,} open gigs"),
+        )
+    )
+    button = (
+        ""
+        if info["running"]
+        else E.form("/run", token, "", "Update listings now", cls="run-now")
+    )
+    return E.list_panel(
+        title="Pipeline",
+        sub="fetch, filter, tailor" + (", apply" if info["auto_apply"] else ""),
+        rows=rows + button,
+        stacked=True,
+    )
+
+
 def _stack_row(href: str, title: str, meta: str, *, tag: str = "", external: bool = False) -> str:
     """A sidebar row: the title gets the width and `meta` (already escaped HTML)
     sits under it, because the sidebar is too narrow for the table-style row the
@@ -267,8 +345,24 @@ def _to_apply_rows(jobs: Sequence[dict[str, Any]]) -> str:
         out.append(_stack_row(
             f"/jobs/{int(job['id'])}",
             (job.get("title") or "Untitled")[:70],
-            esc(f"{(job.get('company') or '—')[:24]} · {_where(job)}"),
+            esc(
+                f"{(job.get('company') or '—')[:24]} · {_where(job)}"
+                + (f" · {str(job['compensation'])[:26]}" if job.get("compensation") else "")
+            ),
             tag=f'<span class="tag {tone}">{pct}</span>' if pct else "",
+        ))
+    return "".join(out)
+
+
+def _freelance_rows(gigs: Sequence[dict[str, Any]]) -> str:
+    out = []
+    for gig in gigs:
+        pay = f" · {gig['compensation']}" if gig.get("compensation") else ""
+        due = _deadline_chip(gig["deadline"]) if gig.get("deadline") else ""
+        out.append(_stack_row(
+            f"/jobs/{int(gig['id'])}",
+            (gig.get("title") or "Untitled")[:70],
+            f"{esc((gig.get('company') or '—')[:22])}{esc(pay[:28])} {due}",
         ))
     return "".join(out)
 
@@ -316,7 +410,7 @@ def _arc_endpoints(country_rows: Sequence[tuple[str, float]]) -> tuple[tuple[flo
 # --------------------------------------------------------------------------- dashboard
 
 
-def dashboard(conn: sqlite3.Connection, config: Config) -> str:
+def dashboard(conn: sqlite3.Connection, config: Config, token: str = "") -> str:
     counts = _counts(conn)
     profile = db.profile_counts(conn)
     evidenced = len(db.skill_evidence_counts(conn))
@@ -326,6 +420,7 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
     # one at any fit rather than being interleaved with it.
     to_apply, to_apply_total = _to_apply(conn, 6)
     applied, applied_total = _applied(conn, 5)
+    freelance, freelance_total = _freelance(conn, 6)
     upcoming, upcoming_total = _upcoming(conn, 6)
 
     by_country = pages._postings_by_country(conn)
@@ -351,6 +446,7 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
     # The three lists are what the dashboard is for, so they come before the search box.
     sidebar = (
         E.notices(pages._config_notices(config))
+        + _run_panel(conn, config, token)
         + E.list_panel(
             title="To apply",
             sub=f"{to_apply_total:,} past your filters",
@@ -363,6 +459,13 @@ def dashboard(conn: sqlite3.Connection, config: Config) -> str:
             sub=f"{applied_total:,} approved or sent",
             rows=_applied_rows(applied) or '<div class="empty">Nothing applied to yet.</div>',
             tools=more("/resume", "All applications"),
+            stacked=True,
+        )
+        + E.list_panel(
+            title="Freelance & contract",
+            sub=f"{freelance_total:,} open gigs",
+            rows=_freelance_rows(freelance) or '<div class="empty">No open gigs yet.</div>',
+            tools=more("/jobs?status=scored&amp;scope=all", "Every posting past your filters"),
             stacked=True,
         )
         + E.list_panel(

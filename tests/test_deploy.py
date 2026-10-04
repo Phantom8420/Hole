@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 import threading
+import tomllib
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +21,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from jobsearch import db  # noqa: E402
+from jobsearch import db, runner  # noqa: E402
 from jobsearch.config import Config  # noqa: E402
 from jobsearch.web.server import INGEST_MAX_ITEMS, App, _handler_class  # noqa: E402
 
@@ -92,6 +93,8 @@ class CacheHeaderTests(ServerCase):
             ("a refused host", "GET", "/login", None, {"Host": "front.example"}),
             ("a failed login", "POST", "/login", b"password=wrong", form),
             ("json", "POST", "/api/ingest", b"{}", {}),
+            ("the run endpoint", "POST", "/api/run", b"", {}),
+            ("the status endpoint", "GET", "/api/status", None, {}),
         )
         for label, method, path, body, headers in cases:
             with self.subTest(label):
@@ -115,6 +118,19 @@ class DeployFilesAgreeTests(unittest.TestCase):
         by_source = {r["source"]: r["destination"] for r in rewrites}
         self.assertEqual(by_source["/"], f"https://{origin}/")
         self.assertEqual(by_source["/:path*"], f"https://{origin}/:path*")
+
+
+    def test_the_timer_fires_when_the_config_says_and_runs_the_pipeline(self) -> None:
+        timer = (self.DEPLOY / "oracle" / "jobsearch-run.timer").read_text()
+        service = (self.DEPLOY / "oracle" / "jobsearch-run.service").read_text()
+        match = re.search(r"^OnCalendar=\*-\*-\* (\d\d:\d\d):00 UTC$", timer, re.M)
+        self.assertIsNotNone(match, "the timer must fire at a fixed GMT time every day")
+        example = tomllib.loads((self.DEPLOY.parent / "config.example.toml").read_text(encoding="utf-8"))
+        self.assertEqual(match.group(1), example["schedule"]["run_at"])
+        self.assertEqual(match.group(1), Config().schedule.run_at)
+        self.assertRegex(service, r"(?m)^ExecStart=\S+/python -m jobsearch run$")
+        self.assertIn("Type=oneshot", service)
+        self.assertIn("Persistent=true", timer)
 
 
 class SessionCookieTests(ServerCase):
@@ -226,3 +242,59 @@ class IngestTests(ServerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunApiTests(ServerCase):
+    """What the desktop and phone apps use: ask whether a run is going, start one."""
+
+    AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.environ["JOBSEARCH_API_TOKEN"] = TOKEN
+
+    def call(self, method: str, path: str, headers: dict | None = None):
+        response, data = self.request(method, path, body=b"" if method == "POST" else None,
+                                      headers=self.AUTH if headers is None else headers)
+        return response.status, json.loads(data)
+
+    def test_both_are_off_until_a_token_is_configured(self) -> None:
+        del os.environ["JOBSEARCH_API_TOKEN"]
+        self.assertEqual(self.call("GET", "/api/status")[0], 404)
+        self.assertEqual(self.call("POST", "/api/run")[0], 404)
+
+    def test_a_missing_or_wrong_token_is_refused(self) -> None:
+        for headers in ({}, {"Authorization": "Bearer nope"}, {"Authorization": TOKEN}):
+            with self.subTest(headers):
+                self.assertEqual(self.call("GET", "/api/status", headers)[0], 401)
+                with mock.patch.object(runner, "start") as start:
+                    self.assertEqual(self.call("POST", "/api/run", headers)[0], 401)
+                start.assert_not_called()
+
+    def test_status_says_where_things_stand(self) -> None:
+        status, body = self.call("GET", "/api/status")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["running"])
+        self.assertEqual((body["run_at"], body["timezone"], body["auto_apply"]), ("12:00", "GMT", False))
+        self.assertEqual(set(body["counts"]), {"remaining", "drafted", "applied", "sent", "freelance"})
+        self.assertRegex(body["next_run_at"], r"T12:00:00\+00:00$")
+
+    def test_run_starts_one_in_the_same_database_and_refuses_a_second(self) -> None:
+        with mock.patch.object(runner, "start") as start:
+            self.assertEqual(self.call("POST", "/api/run"), (202, {"started": True, "running": True}))
+            status, body = self.call("POST", "/api/run")
+        self.assertEqual(status, 409)
+        self.assertTrue(body["running"])
+        start.assert_called_once()
+        self.assertEqual(start.call_args.kwargs["db_path"], self.db_path)
+
+    def test_run_refuses_while_one_is_going(self) -> None:
+        conn = db.connect(self.db_path)
+        db.insert_row(conn, "pipeline_runs", {"started_at": db.now(), "mode": "review-only"})
+        conn.commit()
+        conn.close()
+        with mock.patch.object(runner, "start") as start:
+            self.assertEqual(self.call("POST", "/api/run")[0], 409)
+        start.assert_not_called()
+        self.assertTrue(self.call("GET", "/api/status")[1]["running"])
+

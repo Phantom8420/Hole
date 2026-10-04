@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import Posting, SourceError, SourceResult, fetch_json, html_to_text, iso_date
+from .base import Posting, SourceError, SourceResult, employment_type, fetch_json, html_to_text, iso_date
 
 GREENHOUSE_BOARD = "https://boards-api.greenhouse.io/v1/boards/{token}"
 GREENHOUSE_JOBS = "https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
@@ -108,6 +108,7 @@ def fetch_lever(companies: list[str]) -> SourceResult:
                     compensation=(job.get("salaryRange") or {}).get("currency")
                     and str(job.get("salaryRange")),
                     posted_at=iso_date(job.get("createdAt")),
+                    employment_type=employment_type(categories.get("commitment")),
                 )
             )
     result.complete = not result.errors
@@ -149,6 +150,7 @@ def fetch_ashby(boards: list[str]) -> SourceResult:
                     or str(job.get("descriptionPlain") or ""),
                     compensation=_ashby_compensation(job),
                     posted_at=iso_date(job.get("publishedAt")),
+                    employment_type=employment_type(job.get("employmentType")),
                 )
             )
     result.complete = not result.errors
