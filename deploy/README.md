@@ -26,6 +26,11 @@ Things that bit during setup:
 
 Update: `cd ~/Hole && git pull && sudo systemctl restart jobsearch`.
 
+**Logins survive that restart.** A login (the 30-day cookie you get for the web password) is
+kept in `output/web-sessions.json`, so restarting the service does not sign anyone out. The file
+holds only an HMAC of each login's token under the password, nothing that can be turned back into
+a cookie: changing `JOBSEARCH_PASSWORD` ends every login, and so does deleting the file.
+
 **The daily run.** `jobsearch-run.service` is one pipeline run (`python -m jobsearch run`)
 and `jobsearch-run.timer` starts it every day at 12:00 GMT, so the lists refresh and drafts
 get written without anyone opening an app. Install both once:
