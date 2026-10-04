@@ -98,12 +98,17 @@ class ModelError(RuntimeError):
     """Anything that stopped us getting usable text back.
 
     `transient` marks the ones worth trying again later (out of quota, overloaded, timed
-    out) as opposed to a refusal or a bad key.
+    out) as opposed to a refusal.
+
+    `setup` marks the ones that are about how the model is set up, not about what was asked:
+    no key, a key the provider turns down, an SDK that is not installed. Every request would
+    fail the same way, so nothing asked of it should be written off for it.
     """
 
-    def __init__(self, message: str = "", *, transient: bool = False) -> None:
+    def __init__(self, message: str = "", *, transient: bool = False, setup: bool = False) -> None:
         super().__init__(message)
         self.transient = transient
+        self.setup = setup
 
 
 # Seconds to wait before each retry of a call that failed in a way that may pass.
@@ -117,6 +122,18 @@ def _transient(exc: Exception) -> bool:
     if code in _TRANSIENT_CODES:
         return True
     return any(word in str(exc).lower() for word in _TRANSIENT_WORDS)
+
+
+_REFUSED_CODES = {401, 403}
+_REFUSED_WORDS = ("unauthenticated", "permission_denied", "api key not valid", "invalid api key", "invalid x-api-key")
+
+
+def _refused(exc: Exception) -> bool:
+    """The provider turned the credentials down, so it would turn down the next request too."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if code in _REFUSED_CODES:
+        return True
+    return any(word in str(exc).lower() for word in _REFUSED_WORDS)
 
 
 def load_dotenv(path: Path | None = None, *, only: frozenset[str] | None = None) -> None:
@@ -162,7 +179,8 @@ def resolve_provider(explicit: str | None = None) -> str:
     if candidate:
         if candidate not in PROVIDERS:
             raise ModelError(
-                f"Unknown model provider {candidate!r}. Choose one of: {', '.join(PROVIDERS)}"
+                f"Unknown model provider {candidate!r}. Choose one of: {', '.join(PROVIDERS)}",
+                setup=True,
             )
         return candidate
     for provider in PROVIDERS:  # Gemini first
@@ -186,7 +204,7 @@ def _require_key(provider: str) -> str:
     key = api_key_for(provider)
     if not key:
         names = " or ".join(API_KEY_ENV[provider])
-        raise ModelError(f"{names} is not set.\n  {KEY_HELP[provider]}")
+        raise ModelError(f"{names} is not set.\n  {KEY_HELP[provider]}", setup=True)
     return key
 
 
@@ -206,7 +224,7 @@ def _call_gemini(
         from google import genai
         from google.genai import types
     except ImportError as exc:  # pragma: no cover - environment problem, not logic
-        raise ModelError(f"The Gemini SDK is not installed. Run: {INSTALL_HINT[GEMINI]}") from exc
+        raise ModelError(f"The Gemini SDK is not installed. Run: {INSTALL_HINT[GEMINI]}", setup=True) from exc
 
     client = genai.Client(api_key=key)
     config: dict[str, Any] = {
@@ -232,7 +250,7 @@ def _call_gemini(
                 attempt += 1
                 continue
             raise ModelError(
-                f"Gemini call failed: {type(exc).__name__}: {exc}", transient=transient
+                f"Gemini call failed: {type(exc).__name__}: {exc}", transient=transient, setup=_refused(exc)
             ) from exc
 
     # A blocked *prompt* never produces candidates at all.
@@ -305,7 +323,7 @@ def _call_anthropic(
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover - environment problem, not logic
-        raise ModelError(f"The anthropic SDK is not installed. Run: {INSTALL_HINT[ANTHROPIC]}") from exc
+        raise ModelError(f"The anthropic SDK is not installed. Run: {INSTALL_HINT[ANTHROPIC]}", setup=True) from exc
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
     kwargs: dict[str, Any] = {
@@ -319,7 +337,7 @@ def _call_anthropic(
     try:
         response = client.messages.create(**kwargs)
     except Exception as exc:  # SDK raises a family of API errors; surface them plainly
-        raise ModelError(f"Anthropic API call failed: {type(exc).__name__}: {exc}") from exc
+        raise ModelError(f"Anthropic API call failed: {type(exc).__name__}: {exc}", setup=_refused(exc)) from exc
 
     text = "".join(
         block.text for block in response.content if getattr(block, "type", "") == "text"

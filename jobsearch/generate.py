@@ -80,11 +80,13 @@ section to an employer.>
 
 class GenerationError(RuntimeError):
     """`transient`: the model was out of quota or briefly down, so the posting is worth
-    trying again later rather than writing off."""
+    trying again later rather than writing off. `setup`: the model is not set up to be used
+    (no key, a key the provider refuses), which has nothing to do with the posting."""
 
-    def __init__(self, message: str = "", *, transient: bool = False) -> None:
+    def __init__(self, message: str = "", *, transient: bool = False, setup: bool = False) -> None:
         super().__init__(message)
         self.transient = transient
+        self.setup = setup
 
 
 @dataclass
@@ -155,7 +157,7 @@ def call_model(
             provider=provider,
         )
     except llm.ModelError as exc:
-        raise GenerationError(str(exc), transient=exc.transient) from exc
+        raise GenerationError(str(exc), transient=exc.transient, setup=exc.setup) from exc
 
 
 def generate(

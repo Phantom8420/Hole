@@ -24,6 +24,11 @@ from .sourcing import competitions as competitions_sourcing
 from .config import Config
 from .dispatch import DispatchResult, ats_form, email_gmail, find_apply_email
 
+# A posting the model will not write is marked failed and the run goes on to the next. That is
+# right for one posting, but this many in a row is more likely something about the model than
+# about the postings, and every further one would be written off too. The run stops asking.
+MAX_FAILED_IN_A_ROW = 5
+
 
 @dataclass
 class RunReport:
@@ -39,6 +44,7 @@ class RunReport:
     sent: int = 0
     errors: list[str] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
+    model_failures: int = 0  # postings the model failed on, one after another, in this run
 
     def note(self, line: str) -> None:
         self.log.append(line)
@@ -350,9 +356,10 @@ def process_job(
     *,
     dry_run: bool,
 ) -> bool:
-    """Tailor one posting and decide whether to send it. False means the model is out of
-    quota or briefly down, so the run should stop asking it (the posting stays scored and
-    is tried again next run); True otherwise, however this posting itself went."""
+    """Tailor one posting and decide whether to send it. False means the model cannot be
+    used right now (out of quota, briefly down, or its key is missing or refused), so the run
+    should stop asking it; the posting stays scored and is tried again next run. True
+    otherwise, however this posting itself went."""
     job_id = int(job["id"])
     job_description = _job_description(job)
 
@@ -376,11 +383,13 @@ def process_job(
         result = generate.generate(job_description, plan)
     except generate.GenerationError as exc:
         report.fail(f"{job.get('company')} / {job.get('title')}: {exc}")
-        if exc.transient:
-            return False
+        if exc.transient or exc.setup:
+            return False  # the model, not this posting: it is not written off
+        report.model_failures += 1
         db.update_row(conn, "jobs", job_id, {"status": "failed", "skip_reason": str(exc)[:200]})
         return True
 
+    report.model_failures = 0
     context.tailored_this_run += 1
     report.tailored += 1
 
@@ -588,7 +597,16 @@ def _stages(
         _beat(conn, report)
         if not process_job(conn, config, g, job, context, report, dry_run=dry_run):
             model_down = True
-            report.note("  the model is out of quota or unavailable; the rest wait for the next run")
+            report.note(
+                "  the model cannot be used right now (out of quota, down, or its key is missing "
+                "or refused); the rest wait for the next run"
+            )
+        elif report.model_failures >= MAX_FAILED_IN_A_ROW:
+            model_down = True
+            report.note(
+                f"  {report.model_failures} postings in a row failed, which points at the model "
+                "rather than the postings; stopping here, the rest wait for the next run"
+            )
 
     if skips:
         conn.executemany(

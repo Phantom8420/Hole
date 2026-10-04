@@ -56,6 +56,14 @@ The two endpoints are what an app (the desktop one, or a phone one) needs, both 
 `[schedule] run_at` in `config.toml`, which is what the dashboard and the apps announce;
 `tests/test_deploy.py` checks the shipped files against each other.
 
+**When the run cannot tailor.** If the model's key is missing or turned down (a `401
+UNAUTHENTICATED` in `journalctl -u jobsearch-run.service`), the run stops asking after the first
+posting and leaves everything waiting, and nothing is marked failed. Fix the key in `~/Hole/.env`
+(`python -m jobsearch config --check-model` makes one tiny call and says whether it works) and
+the next run takes the postings. A run that failed several postings one after another stops
+the same way after five. Postings that were marked failed for a reason that was not theirs, by an
+older version, go back with `python -m jobsearch jobs retry --reason UNAUTHENTICATED`.
+
 ## Vercel (`deploy/vercel/`)
 
 A rewrite-only project: every request is proxied to the Oracle origin, so the public
