@@ -40,6 +40,7 @@ from ..sourcing import store
 from ..sourcing.base import Posting
 from . import assets, evoque, evoque_pages, pages
 from .html import esc, layout
+from .sessions import SessionStore
 
 ALLOWED_HOSTS_SUFFIX = ("localhost", "127.0.0.1", "[::1]")
 
@@ -55,6 +56,9 @@ def _page(title: str, message: str, status: int = 400) -> tuple[int, str]:
 
 SESSION_COOKIE = "jobsearch_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
+# Where `serve` keeps logins, so a restart does not sign anyone out (see sessions.py). output/ is
+# not committed.
+SESSIONS_FILE = db.PROJECT_ROOT / "output" / "web-sessions.json"
 
 INGEST_MAX_ITEMS = 200
 
@@ -76,7 +80,13 @@ def _web_url(value: Any) -> str:
 class App:
     """Routing and actions, kept apart from the HTTP plumbing so it can be tested."""
 
-    def __init__(self, db_path: str | Path | None, config: Config, token: str) -> None:
+    def __init__(
+        self,
+        db_path: str | Path | None,
+        config: Config,
+        token: str,
+        sessions_path: str | Path | None = None,
+    ) -> None:
         self.db_path = db_path
         self.config = config
         self.token = token
@@ -84,32 +94,19 @@ class App:
         self.public = False  # set by serve(); True adds Secure to the session cookie
         self._lock = threading.Lock()
         self._run_started = float("-inf")
-        self._sessions: dict[str, float] = {}
-        self._session_lock = threading.Lock()
+        # Logins live in memory, and in a file too when there is a path (see sessions.py).
+        self._sessions = SessionStore(sessions_path, ttl=SESSION_TTL_SECONDS)
 
     # ------------------------------------------------------------------ sessions
 
     def create_session(self) -> str:
-        token = secrets.token_urlsafe(32)
-        with self._session_lock:
-            self._sessions[token] = time.time() + SESSION_TTL_SECONDS
-        return token
+        return self._sessions.create(self.password)
 
     def session_valid(self, token: str) -> bool:
-        if not token:
-            return False
-        with self._session_lock:
-            expiry = self._sessions.get(token)
-            if expiry is None:
-                return False
-            if expiry < time.time():
-                del self._sessions[token]
-                return False
-            return True
+        return self._sessions.valid(self.password, token)
 
     def destroy_session(self, token: str) -> None:
-        with self._session_lock:
-            self._sessions.pop(token, None)
+        self._sessions.destroy(self.password, token)
 
     def try_login(self, fields: dict[str, str]) -> str | None:
         """Check a login form post. Returns a fresh session token on success."""
@@ -983,7 +980,7 @@ def serve(
             "Set JOBSEARCH_PASSWORD to a long random string to bind publicly, or "
             "leave the host as 127.0.0.1."
         )
-    app = App(db_path, config or Config.load(), secrets.token_urlsafe(32))
+    app = App(db_path, config or Config.load(), secrets.token_urlsafe(32), sessions_path=SESSIONS_FILE)
     app.password = password
     app.public = host not in ("127.0.0.1", "localhost", "::1")
     server = ThreadingHTTPServer((host, port), _handler_class(app))

@@ -41,11 +41,14 @@ class ServerCase(unittest.TestCase):
         self.db_path = Path(self.tmp.name) / "test.db"
         db.connect(self.db_path).close()
 
-        self.app = App(self.db_path, Config(), "csrf-token")
+        self.app = self.make_app()
         self.app.password = "hunter2"
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(self.app))
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.addCleanup(self._stop)
+
+    def make_app(self) -> App:
+        return App(self.db_path, Config(), "csrf-token")
 
     def _stop(self) -> None:
         self.httpd.shutdown()
@@ -147,6 +150,59 @@ class SessionCookieTests(ServerCase):
         cookie = self.login()
         self.assertNotIn("Secure", cookie)
         self.assertIn("HttpOnly", cookie)
+
+
+class LoginSurvivesRestartTests(ServerCase):
+    """A deploy restarts the server; whoever is using it should not have to sign in again."""
+
+    def make_app(self) -> App:
+        return App(self.db_path, Config(), "csrf-token", sessions_path=Path(self.tmp.name) / "web-sessions.json")
+
+    def restart(self, password: str = "hunter2") -> None:
+        """Stop the server and start a new one on the same sessions file."""
+        self._stop()
+        self.app = self.make_app()
+        self.app.password = password
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(self.app))
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def sign_in(self) -> str:
+        """The cookie a browser would send afterwards, as `name=value`."""
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        response, _ = self.request("POST", "/login", body=b"password=hunter2", headers=headers)
+        self.assertEqual(response.status, 303)
+        return (response.getheader("Set-Cookie") or "").split(";")[0]
+
+    def open_dashboard(self, cookie: str) -> tuple[int, str]:
+        response, _ = self.request("GET", "/", headers={"Cookie": cookie})
+        return response.status, response.getheader("Location") or ""
+
+    def test_a_login_survives_a_restart(self) -> None:
+        cookie = self.sign_in()
+        self.assertEqual(self.open_dashboard(cookie)[0], 200)
+        self.restart()
+        self.assertEqual(self.open_dashboard(cookie)[0], 200)
+
+    def test_a_cookie_nobody_issued_still_leads_to_the_login_page(self) -> None:
+        self.restart()
+        self.assertEqual(self.open_dashboard("jobsearch_session=never-issued"), (303, "/login"))
+
+    def test_logging_out_is_not_undone_by_a_restart(self) -> None:
+        cookie = self.sign_in()
+        headers = {"Cookie": cookie, "Content-Type": "application/x-www-form-urlencoded"}
+        response, _ = self.request("POST", "/logout", body=b"", headers=headers)
+        self.assertEqual(response.status, 303)
+        self.restart()
+        self.assertEqual(self.open_dashboard(cookie), (303, "/login"))
+
+    def test_a_new_password_ends_every_login(self) -> None:
+        cookie = self.sign_in()
+        self.restart(password="a different password")
+        self.assertEqual(self.open_dashboard(cookie), (303, "/login"))
+
+    def test_the_file_does_not_hold_the_cookie(self) -> None:
+        token = self.sign_in().split("=", 1)[1]
+        self.assertNotIn(token, (Path(self.tmp.name) / "web-sessions.json").read_text(encoding="utf-8"))
 
 
 class IngestTests(ServerCase):
