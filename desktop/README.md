@@ -31,6 +31,10 @@ For development, those three can live in `desktop/.env.local` (gitignored), one
   that look like competitions, and the page itself as a fallback. The results land in the
   inbox, where you edit and tick them. **Send selected to Hole** posts them to
   `/api/ingest`. Nothing is sent in the background.
+- The rail shows each service by its mark (`shell/icons.js`: one 24 x 24 path each, painted
+  in the button's own colour). A service you add in `services.json` shows the letters of its
+  `glyph` until it has a mark there. The Android app draws the same paths. The window icon
+  is `assets/icon.ico`; `python tools/make-icon.py` redraws it.
 
 ## What the app may do on each site
 

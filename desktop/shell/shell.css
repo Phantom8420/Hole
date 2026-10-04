@@ -67,7 +67,10 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
   font-weight: 600;
   font-size: 12px;
   position: relative;
+  display: grid;
+  place-items: center;
 }
+#rail button svg { width: 22px; height: 22px; fill: currentColor; }
 #rail button.active { background: var(--accent); border-color: var(--accent); color: #1a0e07; }
 #rail .spacer { flex: 1; }
 #rail button[data-level]::after {

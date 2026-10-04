@@ -40,15 +40,37 @@ async function run(task, busyMessage) {
 
 // ---------------------------------------------------------------- rail + stage
 
+// The mark for a service, from icons.js. Built as SVG elements rather than an <img> so it takes
+// the button's text colour (the page's CSP allows no images), or null when there is none.
+function mark(id) {
+  if (!ICONS[id]) return null;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICONS[id]);
+  svg.append(path);
+  return svg;
+}
+
 function renderRail() {
   const buttons = state.services.map((svc) => {
-    const button = el('button', { title: `${svc.name} · ${LEVEL_LABEL[svc.level]}`, textContent: svc.glyph });
+    const button = el('button', { title: `${svc.name} · ${LEVEL_LABEL[svc.level]}` });
+    button.setAttribute('aria-label', svc.name);
+    // A service without a mark (one added in services.json) shows the letters of its glyph.
+    const icon = mark(svc.id);
+    if (icon) button.append(icon);
+    else button.textContent = svc.glyph;
     button.dataset.level = svc.level;
     button.classList.toggle('active', Boolean(active) && active.id === svc.id);
     button.addEventListener('click', () => open(svc.id));
     return button;
   });
-  const settings = el('button', { title: 'Settings', textContent: '⚙' });
+  const settings = el('button', { title: 'Settings' });
+  settings.setAttribute('aria-label', 'Settings');
+  const gear = mark('settings');
+  if (gear) settings.append(gear);
+  else settings.textContent = '⚙';
   settings.addEventListener('click', openSettings);
   $('rail').replaceChildren(...buttons, el('div', { className: 'spacer' }), settings);
 }

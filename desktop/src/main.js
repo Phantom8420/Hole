@@ -74,6 +74,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#14110f',
     title: 'Hole',
+    icon: path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -193,7 +194,7 @@ app.whenReady().then(async () => {
   limiter = new Limiter({ file: userFile('usage.json') });
   tokens = tokenStore(app.getPath('userData'), safeStorage);
   if (SELF_TEST) {
-    const code = await require('../test/selftest').run({ BrowserWindow, limiter }).catch((err) => {
+    const code = await require('../test/selftest').run({ BrowserWindow, ipcMain, limiter }).catch((err) => {
       console.error(err);
       return 1;
     });
