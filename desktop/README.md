@@ -31,10 +31,15 @@ For development, those three can live in `desktop/.env.local` (gitignored), one
   that look like competitions, and the page itself as a fallback. The results land in the
   inbox, where you edit and tick them. **Send selected to Hole** posts them to
   `/api/ingest`. Nothing is sent in the background.
-- The rail shows each service by its mark (`shell/icons.js`: one 24 x 24 path each, painted
-  in the button's own colour). A service you add in `services.json` shows the letters of its
-  `glyph` until it has a mark there. The Android app draws the same paths. The window icon
-  is `assets/icon.ico`; `python tools/make-icon.py` redraws it.
+- The rail is three places: **Dashboard** (Hole), **Listings** (Indeed, Proofr, Unstop, Devfolio,
+  Devpost, MLH) and **Social** (LinkedIn, Discord). A place with more than one site shows them as a
+  strip of tabs under the toolbar; every site keeps its own page and its own sign-in, and a place
+  remembers the site you were last on. The dot on a place is the most the app may do on any site in
+  it. In `services.json` a site can say `"section": "listings"` or `"social"` to move (Hole stays the
+  dashboard); a site you add goes in Listings unless it says otherwise.
+- Places and sites are drawn by their marks (`shell/icons.js`: one 24 x 24 path each, painted in the
+  button's own colour). A site you add in `services.json` shows its name alone on its tab. The Android
+  app draws the same paths. The window icon is `assets/icon.ico`; `python tools/make-icon.py` redraws it.
 
 ## What the app may do on each site
 

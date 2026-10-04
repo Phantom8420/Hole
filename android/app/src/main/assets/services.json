@@ -1,96 +1,124 @@
-[
-  {
-    "id": "hole",
-    "name": "Hole",
-    "glyph": "H",
-    "url": null,
-    "level": "view",
-    "extractors": []
-  },
-  {
-    "id": "linkedin",
-    "name": "LinkedIn",
-    "glyph": "in",
-    "url": "https://www.linkedin.com/jobs/",
-    "level": "capture",
-    "extractors": [
-      "linkedin",
-      "jsonld"
-    ]
-  },
-  {
-    "id": "indeed",
-    "name": "Indeed",
-    "glyph": "Id",
-    "url": "https://www.indeed.com/",
-    "level": "capture",
-    "extractors": [
-      "indeed",
-      "jsonld"
-    ]
-  },
-  {
-    "id": "discord",
-    "name": "Discord",
-    "glyph": "Dc",
-    "url": "https://discord.com/app",
-    "level": "capture",
-    "extractors": [
-      "links"
-    ]
-  },
-  {
-    "id": "proofr",
-    "name": "Proofr",
-    "glyph": "Pr",
-    "url": null,
-    "level": "capture",
-    "extractors": [
-      "jsonld",
-      "links"
-    ]
-  },
-  {
-    "id": "unstop",
-    "name": "Unstop",
-    "glyph": "Un",
-    "url": "https://unstop.com/hackathons",
-    "level": "capture",
-    "extractors": [
-      "jsonld",
-      "links"
-    ]
-  },
-  {
-    "id": "devfolio",
-    "name": "Devfolio",
-    "glyph": "Df",
-    "url": "https://devfolio.co/hackathons/upcoming",
-    "level": "capture",
-    "extractors": [
-      "jsonld",
-      "links"
-    ]
-  },
-  {
-    "id": "devpost",
-    "name": "Devpost",
-    "glyph": "Dp",
-    "url": "https://devpost.com/hackathons",
-    "level": "capture",
-    "extractors": [
-      "links"
-    ]
-  },
-  {
-    "id": "mlh",
-    "name": "MLH",
-    "glyph": "M",
-    "url": "https://mlh.com/events",
-    "level": "capture",
-    "extractors": [
-      "jsonld",
-      "links"
-    ]
-  }
-]
+{
+  "sections": [
+    {
+      "id": "dashboard",
+      "name": "Dashboard",
+      "icon": "hole"
+    },
+    {
+      "id": "listings",
+      "name": "Listings",
+      "icon": "listings"
+    },
+    {
+      "id": "social",
+      "name": "Social",
+      "icon": "social"
+    }
+  ],
+  "services": [
+    {
+      "id": "hole",
+      "name": "Hole",
+      "glyph": "H",
+      "url": null,
+      "level": "view",
+      "section": "dashboard",
+      "extractors": []
+    },
+    {
+      "id": "linkedin",
+      "name": "LinkedIn",
+      "glyph": "in",
+      "url": "https://www.linkedin.com/jobs/",
+      "level": "capture",
+      "section": "social",
+      "extractors": [
+        "linkedin",
+        "jsonld"
+      ]
+    },
+    {
+      "id": "indeed",
+      "name": "Indeed",
+      "glyph": "Id",
+      "url": "https://www.indeed.com/",
+      "level": "capture",
+      "section": "listings",
+      "extractors": [
+        "indeed",
+        "jsonld"
+      ]
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "glyph": "Dc",
+      "url": "https://discord.com/app",
+      "level": "capture",
+      "section": "social",
+      "extractors": [
+        "links"
+      ]
+    },
+    {
+      "id": "proofr",
+      "name": "Proofr",
+      "glyph": "Pr",
+      "url": null,
+      "level": "capture",
+      "section": "listings",
+      "extractors": [
+        "jsonld",
+        "links"
+      ]
+    },
+    {
+      "id": "unstop",
+      "name": "Unstop",
+      "glyph": "Un",
+      "url": "https://unstop.com/hackathons",
+      "level": "capture",
+      "section": "listings",
+      "extractors": [
+        "jsonld",
+        "links"
+      ]
+    },
+    {
+      "id": "devfolio",
+      "name": "Devfolio",
+      "glyph": "Df",
+      "url": "https://devfolio.co/hackathons/upcoming",
+      "level": "capture",
+      "section": "listings",
+      "extractors": [
+        "jsonld",
+        "links"
+      ]
+    },
+    {
+      "id": "devpost",
+      "name": "Devpost",
+      "glyph": "Dp",
+      "url": "https://devpost.com/hackathons",
+      "level": "capture",
+      "section": "listings",
+      "extractors": [
+        "links"
+      ]
+    },
+    {
+      "id": "mlh",
+      "name": "MLH",
+      "glyph": "M",
+      "url": "https://mlh.com/events",
+      "level": "capture",
+      "section": "listings",
+      "extractors": [
+        "jsonld",
+        "links"
+      ]
+    }
+  ]
+}

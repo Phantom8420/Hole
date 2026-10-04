@@ -1,8 +1,9 @@
 'use strict';
 
-// The shell page: service rail, toolbar, and the inbox where captured items wait
-// for you to look at them. Captured text comes from third-party pages, so it is
-// only ever written with textContent / .value, never as HTML.
+// The shell page: the rail of places (Dashboard, Listings, Social), the tabs of the sites in the
+// place you are in, the toolbar, and the inbox where captured items wait for you to look at
+// them. Captured text comes from third-party pages, so it is only ever written with
+// textContent / .value, never as HTML.
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -17,6 +18,7 @@ let state;
 let active = null;
 let inbox = [];
 const lastNav = {};
+const lastIn = {}; // place id -> the site last open in it, so coming back lands where you were
 
 function setStatus(message, kind = '') {
   $('status').textContent = message;
@@ -53,17 +55,20 @@ function mark(id) {
   return svg;
 }
 
+const siteById = (id) => state.services.find((s) => s.id === id);
+
+// One button per place. The dot is the most the app may do on any site in it.
 function renderRail() {
-  const buttons = state.services.map((svc) => {
-    const button = el('button', { title: `${svc.name} · ${LEVEL_LABEL[svc.level]}` });
-    button.setAttribute('aria-label', svc.name);
-    // A service without a mark (one added in services.json) shows the letters of its glyph.
-    const icon = mark(svc.id);
+  const buttons = state.sections.map((place) => {
+    const sites = place.services.map(siteById).filter(Boolean);
+    const button = el('button', { className: 'place', title: sites.length > 1 ? `${place.name}: ${sites.map((s) => s.name).join(', ')}` : place.name });
+    button.setAttribute('aria-label', place.name);
+    const icon = mark(place.icon);
     if (icon) button.append(icon);
-    else button.textContent = svc.glyph;
-    button.dataset.level = svc.level;
-    button.classList.toggle('active', Boolean(active) && active.id === svc.id);
-    button.addEventListener('click', () => open(svc.id));
+    button.append(el('span', { textContent: place.name }));
+    button.dataset.level = place.level;
+    button.classList.toggle('active', Boolean(active) && active.section === place.id);
+    button.addEventListener('click', () => open(lastIn[place.id] || place.services[0]));
     return button;
   });
   const settings = el('button', { title: 'Settings' });
@@ -73,6 +78,30 @@ function renderRail() {
   else settings.textContent = '⚙';
   settings.addEventListener('click', openSettings);
   $('rail').replaceChildren(...buttons, el('div', { className: 'spacer' }), settings);
+}
+
+// The sites of the place you are in, as tabs. A place with one site has no strip.
+function renderTabs() {
+  const place = active && state.sections.find((p) => p.id === active.section);
+  const sites = place ? place.services.map(siteById).filter(Boolean) : [];
+  $('tabs').hidden = sites.length < 2;
+  $('tabs').replaceChildren(...(sites.length < 2 ? [] : sites.map((svc) => {
+    const tab = el('button', { className: 'tab', title: `${svc.name} · ${LEVEL_LABEL[svc.level]}` });
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(svc.id === active.id));
+    // A site without a mark (one added in services.json) shows its name alone.
+    const icon = mark(svc.id);
+    if (icon) tab.append(icon);
+    tab.append(el('span', { textContent: svc.name }));
+    tab.classList.toggle('active', svc.id === active.id);
+    tab.addEventListener('click', () => open(svc.id));
+    return tab;
+  })));
+}
+
+function renderPlaces() {
+  renderRail();
+  renderTabs();
 }
 
 function updateToolbar() {
@@ -117,8 +146,9 @@ function renderEmpty() {
 
 async function open(id) {
   const { service, url } = await hole.show(id);
-  active = state.services.find((s) => s.id === id) || service;
-  renderRail();
+  active = siteById(id) || service;
+  lastIn[active.section] = active.id;
+  renderPlaces();
   updateToolbar();
   renderEmpty();
   renderNav(lastNav[id] || { url, canGoBack: false, canGoForward: false });
@@ -216,7 +246,7 @@ $('settings-form').addEventListener('submit', async (event) => {
   try {
     state = await hole.saveSettings({ holeUrl: $('hole-url').value.trim(), token: $('token').value.trim() });
     active = state.services.find((s) => s.id === (active && active.id)) || active;
-    renderRail();
+    renderPlaces();
     updateToolbar();
     $('settings').close();
   } catch (err) {
@@ -311,7 +341,7 @@ window.addEventListener('resize', pushBounds);
 (async () => {
   state = await hole.state();
   renderInbox();
-  renderRail();
+  renderPlaces();
   await open('hole');
   refreshPipeline();
 })();

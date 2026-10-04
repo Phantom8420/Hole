@@ -117,6 +117,36 @@
         android:layout_height="1dp"
         android:background="@color/hole_line" />
 
+    <!-- The sites of the place you are in (Listings, Social), as tabs; the dashboard has one site and no strip. -->
+    <LinearLayout
+        android:id="@+id/tabs_box"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <HorizontalScrollView
+            android:id="@+id/tabs_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:overScrollMode="never"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/tabs"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="6dp" />
+        </HorizontalScrollView>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/hole_line" />
+    </LinearLayout>
+
     <FrameLayout
         android:id="@+id/stage"
         android:layout_width="match_parent"
@@ -167,7 +197,7 @@
         android:layout_height="1dp"
         android:background="@color/hole_line" />
 
-    <!-- The service rail, along the bottom here rather than down the side. -->
+    <!-- The rail: three places (Dashboard, Listings, Social) and Settings, along the bottom here rather than down the side. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -177,22 +207,14 @@
         android:orientation="horizontal"
         android:paddingVertical="10dp">
 
-        <HorizontalScrollView
-            android:id="@+id/rail_scroll"
+        <LinearLayout
+            android:id="@+id/rail"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:overScrollMode="never"
-            android:scrollbars="none">
-
-            <LinearLayout
-                android:id="@+id/rail"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingStart="12dp"
-                android:paddingEnd="4dp" />
-        </HorizontalScrollView>
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="0dp" />
 
         <FrameLayout
             android:id="@+id/settings_slot"

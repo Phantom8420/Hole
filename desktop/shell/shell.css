@@ -22,7 +22,7 @@ html, body {
 
 body {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
 }
 
 button, input, select {
@@ -50,7 +50,7 @@ input, select {
 }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* service rail */
+/* the rail: three places and the settings gear */
 #rail {
   display: flex;
   flex-direction: column;
@@ -70,6 +70,17 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
   display: grid;
   place-items: center;
 }
+#rail button.place {
+  width: 60px;
+  height: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 10.5px;
+  line-height: 1;
+}
 #rail button svg { width: 22px; height: 22px; fill: currentColor; }
 #rail button.active { background: var(--accent); border-color: var(--accent); color: #1a0e07; }
 #rail .spacer { flex: 1; }
@@ -86,15 +97,37 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 #rail button[data-level="capture"]::after { background: var(--good); }
 #rail button[data-level="batch"]::after { background: var(--accent); }
 
-/* toolbar + stage */
-#main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; }
+/* toolbar + tabs + stage */
+#main { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; }
 #toolbar {
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
 }
+
+/* the sites of the place you are in; a place with one site (the dashboard) has no strip */
+#tabs {
+  grid-row: 2;
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+#tabs[hidden] { display: none; }
+#tabs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+#tabs button svg { width: 14px; height: 14px; fill: currentColor; }
+#tabs button.active { background: var(--accent); border-color: var(--accent); color: #1a0e07; font-weight: 600; }
 #address-form { flex: 1; display: flex; min-width: 0; }
 #address { flex: 1; }
 .badge {
@@ -114,7 +147,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 }
 .pipeline.running { color: var(--accent); }
 .pipeline.error { color: var(--bad); }
-#stage { position: relative; min-height: 0; }
+#stage { grid-row: 3; position: relative; min-height: 0; }
 #empty {
   position: absolute;
   inset: 0;
