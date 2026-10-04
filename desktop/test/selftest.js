@@ -13,8 +13,9 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const { WebContentsView } = require('electron');
+const { WebContentsView, session } = require('electron');
 
+const { SessionKeeper } = require('../src/cookies');
 const { Driver } = require('../src/driver');
 const { EXTRACTORS, extract } = require('../src/extractors');
 const { sendItems } = require('../src/ingest');
@@ -165,6 +166,28 @@ async function run({ BrowserWindow, ipcMain, limiter }) {
     const png = await driver.screenshot();
     assert.ok(png.length > 500, `only ${png.length} bytes`);
     assert.equal(png.subarray(1, 4).toString(), 'PNG');
+  });
+
+  // Electron forgets a cookie with no expiry when the app closes; the keeper stores it again with one.
+  // One process cannot restart itself, so this shows the cookie Chromium would write to disk: no
+  // longer a session cookie, with its flags and value intact.
+  await check('a session cookie is stored again with an expiry, so a sign-in outlives the app', async () => {
+    const ses = session.fromPartition('persist:selftest-sessions');
+    const keeper = new SessionKeeper(ses, { settleMs: 60_000 }); // stored by hand below
+    const soon = Math.floor(Date.now() / 1000) + 3600;
+    await ses.cookies.set({ url: 'https://login.example/', name: 'sid', value: 'abc', secure: true, httpOnly: true, sameSite: 'lax' });
+    await ses.cookies.set({ url: 'https://login.example/', name: 'dated', value: 'x', expirationDate: soon });
+    // the cookie store reports a change a moment after set() resolves
+    for (let i = 0; i < 50 && !keeper.waiting.size; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(keeper.waiting.size, 1, 'only the cookie with no expiry should be waiting');
+    await keeper.flush();
+    const [kept] = await ses.cookies.get({ name: 'sid' });
+    assert.equal(kept.session, false);
+    assert.ok(kept.expirationDate > Date.now() / 1000 + 29 * 24 * 3600, `expires at ${kept.expirationDate}`);
+    assert.deepEqual([kept.value, kept.secure, kept.httpOnly, kept.sameSite], ['abc', true, true, 'lax']);
+    const [dated] = await ses.cookies.get({ name: 'dated' });
+    assert.equal(Math.round(dated.expirationDate), soon, 'a cookie that already expires is left as it was');
+    await ses.clearStorageData();
   });
 
   await check('jsonld: JobPosting and Event, tolerating a broken block', async () => {

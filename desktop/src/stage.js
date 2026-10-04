@@ -1,11 +1,13 @@
 'use strict';
 
 const { WebContentsView, shell } = require('electron');
+const { SessionKeeper } = require('./cookies');
 const { Driver } = require('./driver');
 
 // One WebContentsView per service, each with its own persistent partition so a
 // LinkedIn login never shares cookies with Discord or Hole. Views are created on
-// first use and kept, so switching back does not reload or log you out.
+// first use and kept, so switching back does not reload or log you out, and a
+// SessionKeeper keeps a sign-in made with a no-expiry cookie across restarts too.
 
 const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen']);
 
@@ -15,6 +17,7 @@ class Stage {
     this.limiter = limiter;
     this.onNav = onNav;
     this.views = new Map();
+    this.keepers = [];
     this.activeId = null;
     this.bounds = { x: 0, y: 0, width: 0, height: 0 };
     this.hidden = false;
@@ -32,6 +35,7 @@ class Stage {
     const wc = view.webContents;
     wc.session.setPermissionRequestHandler((_wc, permission, callback) => callback(ALLOWED_PERMISSIONS.has(permission)));
     wc.setBackgroundThrottling(false);
+    this.keepers.push(new SessionKeeper(wc.session));
 
     // Sign-in popups (Google, Apple, SSO) need a real child window with the
     // opener intact; everything else that wants a new window is sent to the
@@ -88,6 +92,11 @@ class Stage {
 
   active() {
     return this.activeId ? this.views.get(this.activeId) : null;
+  }
+
+  // Store the sign-ins still waiting for their expiry (see cookies.js). For when the app closes.
+  keepSessions() {
+    return Promise.all(this.keepers.map((keeper) => keeper.flush().catch(() => {})));
   }
 
   setBounds(rect) {
