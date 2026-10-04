@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="20dp"
+    android:paddingTop="8dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="4dp"
+        android:text="@string/settings_address"
+        android:textColor="@color/hole_muted"
+        android:textSize="13sp" />
+
+    <EditText
+        android:id="@+id/hole_url"
+        style="@style/HoleInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/address_hint_https"
+        android:importantForAutofill="no"
+        android:inputType="textUri"
+        android:minHeight="44dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:layout_marginBottom="4dp"
+        android:text="@string/settings_token"
+        android:textColor="@color/hole_muted"
+        android:textSize="13sp" />
+
+    <EditText
+        android:id="@+id/token"
+        style="@style/HoleInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:importantForAutofill="no"
+        android:inputType="textPassword"
+        android:minHeight="44dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="@string/settings_hint"
+        android:textColor="@color/hole_muted"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/settings_error"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:minHeight="20dp"
+        android:textColor="@color/hole_bad"
+        android:textSize="13sp" />
+</LinearLayout>

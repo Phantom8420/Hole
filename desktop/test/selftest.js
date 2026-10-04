@@ -19,6 +19,7 @@ const { Driver } = require('../src/driver');
 const { EXTRACTORS, extract } = require('../src/extractors');
 const { sendItems } = require('../src/ingest');
 const { Limiter, LimitError } = require('../src/limits');
+const { resolveServices } = require('../src/services');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 
@@ -50,7 +51,51 @@ function startServer() {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-async function run({ BrowserWindow, limiter }) {
+// Load the real shell page with the real preload, answering the few channels it asks about at
+// start-up, and describe what the rail drew. What this shows that icons.test.js cannot: each
+// path parses (an invalid one measures 0 x 0) and is painted in the button's own colour.
+async function drawnRail({ BrowserWindow, ipcMain }) {
+  const services = resolveServices({}, 'http://127.0.0.1:9');
+  const handlers = {
+    'app:state': () => ({ holeUrl: 'http://127.0.0.1:9', hasToken: false, perDay: 100, services: services.map((s) => ({ ...s, used: 0 })) }),
+    'stage:show': (_event, id) => ({ service: services.find((s) => s.id === id), url: '' }),
+    'pipeline:status': () => ({ text: 'selftest', running: false }),
+  };
+  for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
+  const shell = new BrowserWindow({
+    width: 900, height: 700, x: -3000, y: -3000, skipTaskbar: true,
+    webPreferences: { preload: path.join(__dirname, '..', 'src', 'preload.js'), contextIsolation: true, sandbox: true },
+  });
+  try {
+    await shell.loadFile(path.join(__dirname, '..', 'shell', 'index.html'));
+    const read = () => shell.webContents.executeJavaScript(`(() => {
+      const buttons = [...document.querySelectorAll('#rail button')];
+      return buttons.map((button) => {
+        const path = button.querySelector('svg path');
+        const box = path ? path.getBBox() : null;
+        return {
+          label: button.getAttribute('aria-label'),
+          marked: Boolean(path),
+          box: box && { x: box.x, y: box.y, width: box.width, height: box.height },
+          fill: path ? getComputedStyle(path).fill : null,
+          colour: getComputedStyle(button).color,
+          text: button.textContent,
+        };
+      });
+    })()`);
+    for (let i = 0; i < 50; i += 1) {
+      const rail = await read();
+      if (rail.length) return { services, rail };
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('the shell never drew a rail');
+  } finally {
+    shell.destroy();
+    for (const channel of Object.keys(handlers)) ipcMain.removeHandler(channel);
+  }
+}
+
+async function run({ BrowserWindow, ipcMain, limiter }) {
   const server = await startServer();
   const base = `http://127.0.0.1:${server.address().port}`;
   // A hidden (or near-transparent) window gets no input and has no surface to
@@ -142,6 +187,41 @@ async function run({ BrowserWindow, limiter }) {
     const [fallback] = await extract(driver, ['linkedin', 'jsonld']);
     assert.equal(fallback.kind, 'page');
     assert.equal(fallback.title, 'interact');
+  });
+
+  // The phone runs android/app/src/main/assets/extractors.js in the page's own world, wrapped as
+  // Capture.script() in Capture.kt wraps it. Here the same text runs in real Chromium, and has to
+  // find what the desktop extractors find on the same pages.
+  await check('the Android capture script finds what the desktop extractors find', async () => {
+    const library = fs.readFileSync(path.join(__dirname, '..', '..', 'android', 'app', 'src', 'main', 'assets', 'extractors.js'), 'utf8');
+    const script = (names) => `(function(){try{${library}\nreturn JSON.stringify(holeExtract(${JSON.stringify(names)}));}`
+      + 'catch(e){return JSON.stringify({error:String((e&&e.message)||e)});}})()';
+    for (const [page, names] of [
+      ['jobposting.html', ['linkedin', 'jsonld']],
+      ['linkedin-list.html', ['linkedin', 'jsonld']],
+      ['indeed-list.html', ['indeed', 'jsonld']],
+      ['links.html', ['links']],
+      ['interact', ['linkedin', 'jsonld']], // nothing recognised: both fall back to the page itself
+    ]) {
+      await driver.goto(`${base}/${page}`);
+      const onPhone = JSON.parse(await view.webContents.executeJavaScript(script(names)));
+      assert.ok(Array.isArray(onPhone), `${page}: ${JSON.stringify(onPhone)}`);
+      assert.ok(onPhone.length > 0, `${page}: found nothing`);
+      assert.deepEqual(onPhone, await extract(driver, names), page);
+    }
+  });
+
+  await check('the rail draws a mark for every service, in the button\'s own colour', async () => {
+    const { services, rail } = await drawnRail({ BrowserWindow, ipcMain });
+    assert.deepEqual(rail.map((b) => b.label), [...services.map((s) => s.name), 'Settings']);
+    for (const button of rail) {
+      assert.ok(button.marked, `${button.label} has no mark`);
+      assert.equal(button.text, '', `${button.label} still shows letters`);
+      const { x, y, width, height } = button.box;
+      assert.ok(width > 4 && height > 4, `${button.label}'s path measures ${width} x ${height}`);
+      assert.ok(x >= -0.5 && y >= -0.5 && x + width <= 24.5 && y + height <= 24.5, `${button.label} leaves its 24 x 24 box`);
+      assert.equal(button.fill, button.colour, `${button.label} is not painted in the button's colour`);
+    }
   });
 
   await check('the load budget stops automated navigation', async () => {

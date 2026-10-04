@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+# the APKs built for sideloading; build one with `gradlew assembleDebug` (see README.md)
+dist/
