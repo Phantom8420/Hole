@@ -4,11 +4,12 @@ The Competitions page was manual entry only: you saw a hackathon somewhere, you
 typed it in. This module is the other half -- it goes and looks, so the row
 appears before the deadline rather than after it.
 
-Same rules as the job connectors next door: documented public endpoints only,
-no scraping a site that forbids it, and a dead source is skipped rather than
-fatal. Notably absent for that reason:
+Same rules as the job connectors next door: public endpoints only, no scraping a
+site that forbids it, and a dead source is skipped rather than fatal. Unstop is
+read from the public listing its own pages are built on: its robots.txt allows
+/api/public/, it answers without a key or cookies, and its terms say nothing against
+it. (This module used to say it blocked programs; it does not.) Notably absent:
 
-- Unstop     requires cookies and blocks non-browser clients outright.
 - Devfolio   listings are client-rendered; the HTML a fetch returns is empty.
 - LinkedIn   User Agreement bans automated access.
 
@@ -20,11 +21,26 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, Iterator
 
-from .base import SourceError, fetch_json
+from .base import SourceError, fetch_json, iso_date
 
 DEVPOST_API = "https://devpost.com/api/hackathons"
+UNSTOP_API = "https://unstop.com/api/public/opportunity/search-result"
+UNSTOP_SITE = "https://unstop.com/"
+UNSTOP_PAGE_SIZE = 18  # what its own pages ask for
+UNSTOP_PAGES = 20  # hard stop per list
+UNSTOP_LIMIT = 300  # some 270 hackathons are open at a time, then the competitions worth having
+# Its competitions list is mostly college-fest events (dance, essays, olympiads) and quizzes.
+# Case competitions and innovation challenges are the ones for a career; hackathons have a
+# list of their own.
+UNSTOP_COMPETITION_KINDS = {"case_competition", "innovation_challenge"}
+# Prize currencies arrive as Font Awesome class names.
+UNSTOP_CURRENCY = {
+    "fa-rupee": "₹", "fa-inr": "₹", "fa-dollar": "$", "fa-usd": "$",
+    "fa-euro": "€", "fa-eur": "€", "fa-gbp": "£",
+}
 
 # Devpost theme names -> the category the Competitions page groups by. Anything
 # unmapped stays a hackathon, which is what Devpost is mostly for.
@@ -144,16 +160,176 @@ def devpost(*, limit: int = 100, online_only: bool = False) -> Iterator[Opportun
             seen += 1
 
 
+def _unstop_last_day(value: Any) -> str | None:
+    """The last day of something. Unstop stamps an end at the midnight that starts a day
+    (2026-10-09T00:00:00+05:30 is the end of the 8th) and its cards count down to that, so
+    the date a list shows has to be the day before or it promises a day that is not there."""
+    text = str(value or "")
+    day = iso_date(text)
+    if day and re.search(r"T00:00:\d\d", text):
+        return (datetime.strptime(day, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    return day
+
+
+def _unstop_eligible(row: dict[str, Any]) -> list[str]:
+    return [
+        f["name"] for f in row.get("filters") or []
+        if f.get("type") == "eligible" and f.get("name")
+    ]
+
+
+def _unstop_open_to(names: list[str]) -> str | None:
+    """Who may enter, the way its cards say it: "All" is everyone."""
+    if not names:
+        return None
+    if "All" in names:
+        return "everyone"
+    shown = ", ".join(names[:4])
+    return f"{shown} and {len(names) - 4} more" if len(names) > 4 else shown
+
+
+def _unstop_where(row: dict[str, Any]) -> str:
+    region = row.get("region")
+    if region == "online":
+        return "online"
+    place = row.get("address_with_country_logo") or {}
+    country = (place.get("country") or {}).get("name")
+    town = ", ".join(p for p in (place.get("city"), place.get("state"), country) if p)
+    town = town or place.get("address") or ""
+    if region == "hybrid":
+        return f"hybrid, {town}" if town else "hybrid"
+    return town or "on site"
+
+
+def _unstop_team(reg: dict[str, Any]) -> str | None:
+    low, high = reg.get("min_team_size") or 1, reg.get("max_team_size")
+    if not high:
+        return None
+    if high == 1:
+        return "solo"
+    return str(high) if low == high else f"{low}-{high}"
+
+
+def _unstop_prize(row: dict[str, Any]) -> str | None:
+    """The biggest cash prize, with its currency sign when it names one."""
+    best: tuple[float, str] | None = None
+    for prize in row.get("prizes") or []:
+        try:
+            cash = float(prize.get("cash") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cash > 0 and (best is None or cash > best[0]):
+            best = (cash, UNSTOP_CURRENCY.get(prize.get("currency") or "", ""))
+    return f"{best[1]}{best[0]:,.0f}" if best else None
+
+
+def _unstop_fee(row: dict[str, Any]) -> str | None:
+    amounts = []
+    for service in row.get("payment_services") or []:
+        try:
+            amount = float(service.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if amount > 0:
+            amounts.append(amount)
+    return f"{min(amounts):,.0f}" if amounts else None
+
+
+def _unstop_category(row: dict[str, Any]) -> str:
+    text = f"{row.get('subtype') or ''} {row.get('title') or ''}".lower()
+    if row.get("type") == "hackathons" or "hackathon" in text:
+        return "hackathon"
+    if re.search(r"financ|invest|trading|fintech", text):
+        return "finance_competition"
+    if "case" in text:
+        return "case_competition"
+    return "other"
+
+
+def _unstop_opportunity(row: dict[str, Any]) -> Opportunity | None:
+    title = (row.get("title") or "").strip()
+    link = (row.get("public_url") or "").strip().lstrip("/")
+    if not title or not link:
+        return None
+    reg = row.get("regnRequirements") or {}
+    ends = _unstop_last_day(row.get("end_date"))
+    closes = _unstop_last_day(reg.get("end_regn_dt")) or ends
+    org = (row.get("organisation") or {}).get("name")
+    open_to = _unstop_open_to(_unstop_eligible(row))
+    fee, prize = _unstop_fee(row), _unstop_prize(row)
+    bits = [
+        f"by {org}" if org else None,
+        _unstop_where(row),
+        f"open to {open_to}" if open_to else None,
+        f"fee {fee}" if fee else None,
+        f"prize up to {prize}" if prize else None,
+    ]
+    tracks = [w["name"] for w in row.get("workfunction") or [] if w.get("name")]
+    tracks += [s["skill_name"] for s in (row.get("required_skills") or [])[:3] if s.get("skill_name")]
+    # Registration closes before a long competition ends; say when it does end.
+    period = None
+    if ends and closes and ends > closes:
+        period = "until " + datetime.strptime(ends, "%Y-%m-%d").strftime("%b %d, %Y")
+    return Opportunity(
+        name=title,
+        category=_unstop_category(row),
+        description=" -- ".join(b for b in bits if b) or None,
+        url=UNSTOP_SITE + link,
+        apply_url=UNSTOP_SITE + link,
+        deadline=closes,
+        period=period,
+        team_size=_unstop_team(reg),
+        tracks=list(dict.fromkeys(tracks)),
+        prize=prize,
+        source="unstop",
+    )
+
+
+def unstop(*, limit: int = UNSTOP_LIMIT, online_only: bool = False) -> Iterator[Opportunity]:
+    """Open hackathons, then case competitions and innovation challenges, on Unstop.
+
+    Events for school students only are left out -- not for someone in college -- and
+    each row carries what the page's cards show: when registration closes, team size,
+    who may enter, the fee and the top prize.
+    """
+    seen: set[Any] = set()
+    kept = 0
+    for kind in ("hackathons", "competitions"):
+        for page in range(1, UNSTOP_PAGES + 1):
+            payload = fetch_json(
+                UNSTOP_API,
+                params={"opportunity": kind, "page": page, "per_page": UNSTOP_PAGE_SIZE,
+                        "oppstatus": "open"},
+            )
+            listing = payload.get("data") if isinstance(payload, dict) else None
+            listing = listing if isinstance(listing, dict) else {}
+            rows = listing.get("data") or []
+            for row in rows:
+                if row.get("id") is not None:
+                    if row["id"] in seen:  # hackathons are in the competitions list too
+                        continue
+                    seen.add(row["id"])
+                if row.get("type") != "hackathons" and row.get("subtype") not in UNSTOP_COMPETITION_KINDS:
+                    continue
+                names = _unstop_eligible(row)
+                if names and all("school" in n.lower() for n in names):
+                    continue
+                if online_only and row.get("region") != "online":
+                    continue
+                opportunity = _unstop_opportunity(row)
+                if opportunity is None:
+                    continue
+                yield opportunity
+                kept += 1
+                if kept >= limit:
+                    return
+            if not rows or page >= (listing.get("last_page") or page):
+                break
+
+
 # Platforms that cannot be read programmatically. Recorded as bookmark rows so
 # the dashboard still points at them rather than silently omitting them.
 MANUAL_PLATFORMS = (
-    Opportunity(
-        name="Unstop -- browse by hand",
-        category="other",
-        description="2,500+ India hackathons and case competitions. Blocks automated clients, so this is a bookmark, not a feed.",
-        url="https://unstop.com/hackathons",
-        source="manual",
-    ),
     Opportunity(
         name="Devfolio -- browse by hand",
         category="other",
@@ -171,8 +347,8 @@ MANUAL_PLATFORMS = (
 )
 
 
-def discover(*, limit: int = 100, online_only: bool = False,
-             include_manual: bool = True) -> tuple[list[Opportunity], list[str]]:
+def discover(*, limit: int = 100, online_only: bool = False, include_manual: bool = True,
+             unstop_limit: int = UNSTOP_LIMIT) -> tuple[list[Opportunity], list[str]]:
     """Every connector, failures collected rather than raised."""
     found: list[Opportunity] = []
     errors: list[str] = []
@@ -180,6 +356,10 @@ def discover(*, limit: int = 100, online_only: bool = False,
         found.extend(devpost(limit=limit, online_only=online_only))
     except SourceError as exc:
         errors.append(f"devpost: {exc}")
+    try:
+        found.extend(unstop(limit=unstop_limit, online_only=online_only))
+    except SourceError as exc:  # what was read before it failed is kept
+        errors.append(f"unstop: {exc}")
     if include_manual:
         found.extend(MANUAL_PLATFORMS)
     return found, errors

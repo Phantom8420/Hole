@@ -172,9 +172,10 @@ Kept here because it was asked for directly; treat dates/branch names as of 2026
 
 ### What's been built
 
-- **Competitions discovery** — `jobsearch/sourcing/competitions.py` (Devpost's public
-  API; Unstop/Devfolio/MLH recorded as bookmark rows since they can't be read
-  automatically), wired into every `jobsearch run` automatically, plus `add_job`-style
+- **Competitions discovery** — `jobsearch/sourcing/competitions.py` (Devpost's and
+  Unstop's public listings, Unstop with deadline, team size and who may enter; Devfolio/MLH
+  recorded as bookmark rows since they can't be read automatically), wired into every
+  `jobsearch run` automatically, plus `add_job`-style
   manual entry from the web UI and MCP. Currently tracking real discovered opportunities
   in addition to hand-entered ones.
 - **Job sourcing expanded** from 3 placeholder boards to 32 real ones drawn from the
