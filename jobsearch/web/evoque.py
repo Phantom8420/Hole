@@ -20,7 +20,8 @@ from .evoque_assets import CSS, GLOBE_JS
 from .html import esc
 
 # The nav the sidebar renders, in order. `key` matches the `active` argument
-# pages pass; `count` is looked up in the counts mapping a page supplies.
+# pages pass; `count` is looked up in the counts mapping a page supplies. Profile is
+# not in the list: it is the account row under it (`_me`), next to Log out.
 NAV = [
     ("", "Dashboard", "home"),
     ("todos", "Ideas & To Dos", "checklist"),
@@ -29,7 +30,6 @@ NAV = [
     ("competitions", "Competitions", "trophy"),
     ("queue", "Queue", "clock"),
     ("resume", "Resume", "file"),
-    ("profile", "Profile", "user"),
     ("analytics", "Analytics", "chart"),
     ("runs", "Runs", "history"),
     ("answers", "Answers", "chat"),
@@ -75,7 +75,30 @@ def _brand() -> str:
     return '<a class="brand" href="/"><span class="mark"></span><b>hole</b></a>'
 
 
-def _nav(active: str, counts: dict[str, int] | None = None) -> str:
+def _initials(name: str) -> str:
+    words = name.split()
+    if not words:
+        return ""
+    return (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper()
+
+
+def _me(active: str, who: str) -> str:
+    """Who is signed in, under the nav: the profile page and the way out."""
+    name = who.strip()
+    mark = esc(_initials(name)) or icon("user", 16)
+    on = " on" if active == "profile" else ""
+    return (
+        '<div class="nav-me">'
+        f'<a class="me-link{on}" href="/profile" title="Your profile">'
+        f'<span class="avatar">{mark}</span>'
+        f'<span class="me-text"><b>{esc(name) or "Profile"}</b><small>Profile</small></span></a>'
+        '<form method="post" action="/logout">'
+        '<button class="me-out" type="submit" title="Log out">Log out</button></form>'
+        "</div>"
+    )
+
+
+def _nav(active: str, counts: dict[str, Any] | None = None) -> str:
     counts = counts or {}
     items = []
     for key, label, ico in NAV:
@@ -86,7 +109,7 @@ def _nav(active: str, counts: dict[str, int] | None = None) -> str:
             f'<a class="{cls}" href="/{key}">{icon(ico, 15)}'
             f"<span>{esc(label)}</span>{badge}</a>"
         )
-    return f'<nav class="nav">{"".join(items)}</nav>'
+    return f'<nav class="nav">{"".join(items)}{_me(active, str(counts.get("who") or ""))}</nav>'
 
 
 def _head_tools() -> str:
@@ -96,12 +119,6 @@ def _head_tools() -> str:
         '<div class="pill"><svg class="bell" width="20" height="20" viewBox="0 0 24 24" '
         'fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>'
         '<span class="dot"></span></div>'
-        '<span class="avatar"></span>'
-        '<form method="post" action="/logout" style="margin:0">'
-        '<button type="submit" title="Log out" '
-        'style="height:44px;padding:0 16px;border-radius:13px;border:1px solid var(--line);'
-        'background:var(--panel-2);color:var(--muted);font:inherit;font-size:13px;'
-        'font-weight:600;cursor:pointer">Log out</button></form>'
         "</div>"
     )
 
@@ -114,7 +131,7 @@ def page(
     active: str,
     sidebar: str,
     main: str,
-    counts: dict[str, int] | None = None,
+    counts: dict[str, Any] | None = None,
 ) -> str:
     """A full document in the Evoque shell.
 
@@ -211,6 +228,11 @@ _EXTRA_CSS = """
    It needs its own scrollbar, same as `.main-scroll` gets one below. */
 .sidebar{overflow-y:auto}
 .flights.stack{flex:none}
+/* The reference's `.flights{flex:1;min-height:0}` lets the list shrink to its own
+   padding when the nav and the search card already fill a short window: the heading
+   then spills out of an empty pill and the rows are gone. A floor keeps the title and
+   a couple of rows; past that the sidebar scrolls. */
+.sidebar .flights{min-height:200px}
 .sidebar::-webkit-scrollbar{width:6px}
 .sidebar::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:9px}
 @media(max-width:1040px){.app{height:auto;grid-template-rows:none}}
@@ -224,6 +246,23 @@ _EXTRA_CSS = """
 .nav-item.on svg{color:#fff}
 .nav-n{margin-left:auto;font-size:11px;font-weight:700;color:var(--muted-2)}
 .nav-item.on .nav-n{color:rgba(255,255,255,.85)}
+/* Who is signed in, at the foot of the nav card: the profile page and Log out. */
+.nav-me{display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
+.nav-me form{margin:0}
+.me-link{flex:1;min-width:0;display:flex;align-items:center;gap:11px;padding:6px 8px;border-radius:13px;
+  color:var(--text);text-decoration:none;transition:.15s}
+.me-link:hover{background:var(--panel-3)}
+.me-link.on{background:var(--accent);color:#fff}
+.nav-me .avatar{width:34px;height:34px;border-radius:11px;flex-shrink:0;display:grid;place-items:center;
+  font:700 12px 'Sora','Inter',sans-serif;letter-spacing:.02em;color:var(--accent)}
+.me-link.on .avatar{background:rgba(255,255,255,.22);color:#fff}
+.me-text{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.me-text b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.me-text small{font-size:11px;color:var(--muted-2)}
+.me-link.on small{color:rgba(255,255,255,.85)}
+.me-out{height:34px;padding:0 12px;border-radius:11px;border:1px solid var(--line);background:var(--panel-3);
+  color:var(--muted);font:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
+.me-out:hover{color:var(--text);border-color:var(--line-2)}
 
 .main-scroll{position:absolute;inset:96px 0 0;overflow-y:auto;padding:8px 34px 34px;z-index:4}
 .main-scroll::-webkit-scrollbar{width:6px}

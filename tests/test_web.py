@@ -10,6 +10,7 @@ model output is not trusted either, so both reach these pages as hostile text.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -136,6 +137,62 @@ class RouteTests(WebTestCase):
         status, body = self.app.get("/jobs", {"status": ["applied"]})
         self.assertEqual(status, 200)
         self.assertNotIn("Backend Engineer", body)
+
+
+class NavTests(WebTestCase):
+    @staticmethod
+    def nav_of(body: str) -> str:
+        return body.split('<nav class="nav">', 1)[1].split("</nav>", 1)[0]
+
+    def test_profile_and_log_out_are_at_the_foot_of_the_nav(self) -> None:
+        for path in ("/", "/jobs", "/profile", "/resume"):
+            with self.subTest(path=path):
+                status, body = self.app.get(path, {})
+                self.assertEqual(status, 200)
+                nav = self.nav_of(body)
+                self.assertIn('class="nav-me"', nav)
+                self.assertIn('href="/profile"', nav)
+                self.assertIn("Dana Reyes", nav)
+                self.assertIn(">DR<", nav)
+                self.assertIn('action="/logout"', nav)
+                # moved, not copied: the header no longer has its own
+                self.assertEqual(body.count('action="/logout"'), 1)
+                self.assertNotIn('<span class="avatar"></span>', body)
+
+    def test_profile_is_marked_on_its_own_page_only(self) -> None:
+        _status, body = self.app.get("/profile", {})
+        self.assertIn('class="me-link on"', body)
+        _status, body = self.app.get("/jobs", {})
+        self.assertIn('class="me-link"', body)
+        self.assertNotIn('class="me-link on"', body)
+
+    def test_a_missing_name_leaves_a_plain_profile_link(self) -> None:
+        conn = db.connect(self.db_path)
+        conn.execute("UPDATE profile SET full_name = NULL WHERE id = 1")
+        conn.commit()
+        conn.close()
+        _status, body = self.app.get("/", {})
+        nav = self.nav_of(body)
+        self.assertIn("<b>Profile</b>", nav)
+        self.assertIn('href="/profile"', nav)
+
+    def test_the_name_is_escaped(self) -> None:
+        conn = db.connect(self.db_path)
+        db.set_profile_field(conn, "full_name", XSS)
+        conn.commit()
+        conn.close()
+        _status, body = self.app.get("/", {})
+        self.assertNotIn(XSS, body)
+        self.assertIn("&lt;script&gt;", self.nav_of(body))
+        self.assertEqual(body.count("<script>"), 1)
+
+    def test_the_sidebar_list_cannot_shrink_to_nothing(self) -> None:
+        # The stylesheet's `.flights{flex:1;min-height:0}` squeezed the Awaiting review list to
+        # its padding in a short window, with its heading spilling out of the empty box.
+        _status, body = self.app.get("/resume", {})
+        floor = re.search(r"\.sidebar \.flights\{min-height:(\d+)px\}", body)
+        self.assertIsNotNone(floor, "no minimum height on the sidebar's list panel")
+        self.assertGreaterEqual(int(floor.group(1)), 160)
 
 
 class EscapingTests(WebTestCase):

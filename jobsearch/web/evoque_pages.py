@@ -33,18 +33,25 @@ FALLBACK_ARC = ((39.8, -98.6), (54.0, -2.5))  # US -> UK, if data names neither
 # --------------------------------------------------------------------------- shared
 
 
-def _counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Badge counts for the nav, keyed by the nav's own route keys."""
+def _counts(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Badge counts for the nav, keyed by the nav's own route keys, and `who`, the name
+    its account row shows. Every page already makes this one lookup for its shell."""
     def one(sql: str) -> int:
         try:
             return int(conn.execute(sql).fetchone()[0])
         except sqlite3.Error:
             return 0
 
+    try:
+        row = conn.execute("SELECT full_name FROM profile WHERE id = 1").fetchone()
+        who = str(row[0] or "") if row else ""
+    except sqlite3.Error:
+        who = ""
     return {
         "jobs": one("SELECT COUNT(*) FROM jobs"),
         "competitions": one("SELECT COUNT(*) FROM competitions"),
         "resume": one("SELECT COUNT(*) FROM applications WHERE status='drafted'"),
+        "who": who,
     }
 
 
